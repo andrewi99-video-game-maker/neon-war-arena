@@ -1,0 +1,18 @@
+{
+  "name": "rip-off-brawl-stars",
+  "version": "1.0.0",
+  "description": "A top-down action game built with Pygame featuring: - Player character with mouse-aimed shooting - Multiple enemy AI with automatic targeting - Projectile-based combat system - Arena-style gameplay - Health and ammo management",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^5.2.1",
+    "socket.io": "^4.8.3"
+  }
+}
