@@ -14,6 +14,10 @@ const minimapCanvas = document.getElementById('minimapCanvas');
 const minimapCtx = minimapCanvas ? minimapCanvas.getContext('2d') : null;
 const deathScreen = document.getElementById('death-screen');
 const respawnTimer = document.getElementById('respawn-timer');
+const selectionScreen = document.getElementById('selection-screen');
+const uiLayer = document.getElementById('ui-layer');
+const btnTitus = document.getElementById('select-titus');
+const btnAndrew = document.getElementById('select-andrew');
 
 // Virtual Resolution for Fair Scaling
 const VIRTUAL_WIDTH = 1920;
@@ -51,6 +55,10 @@ const Sound = {
     },
     shoot() { this.play(800, 'square', 0.1, 0.1); },
     super() { this.play(400, 'sawtooth', 0.3, 0.2); },
+    wave() {
+        this.play(150, 'sine', 0.8, 0.3); // Low rumbing wave
+        setTimeout(() => this.play(400, 'sawtooth', 0.4, 0.1), 50); // Lightning crackle
+    },
     hit() { this.play(200, 'sine', 0.05, 0.1); },
     death() { this.play(100, 'sawtooth', 0.5, 0.3); },
     wallHit() { this.play(150, 'sine', 0.1, 0.05); }
@@ -97,15 +105,27 @@ window.addEventListener('mousedown', () => Sound.init(), { once: true });
 window.addEventListener('keydown', () => Sound.init(), { once: true });
 
 // Game State
-let myId = null;
-let players = {};
-let projectiles = []; // Client-side projectile simulation for local responsiveness
-let camera = { x: 0, y: 0 };
-let input = {
+const input = {
     w: false, a: false, s: false, d: false,
     mouseX: 0, mouseY: 0, mouseDown: false
 };
+
+let myId = null;
+let myCharacter = null;
+let players = {};
+let powerups = [];
+let lightningTethers = []; // { p1, p2, life }
+let projectiles = []; // Client-side projectile simulation for local responsiveness
+let camera = { x: 0, y: 0 };
 let lastShootTime = 0;
+
+// Interpolation state
+let networkState = {
+    prev: null,
+    current: null,
+    lastTime: 0
+};
+const INTERP_OFFSET = 100; // ms of buffer
 
 // Mobile State
 let isMobile = false;
@@ -260,46 +280,28 @@ if (isMobile) {
     });
 }
 
-const WORLD_WIDTH = 5760;
-const WORLD_HEIGHT = 3240;
+const WORLD_WIDTH = 2000;
+const WORLD_HEIGHT = 2000;
 
 const WALL_RECTS = [
-    // Interior Obstacles (Original Cluster at Center)
-    { x: 2880 - 300, y: 1620 - 250, w: 120, h: 150 },
-    { x: 2880 + 180, y: 1620 - 250, w: 120, h: 150 },
-    { x: 2880 - 300, y: 1620 + 100, w: 120, h: 150 },
-    { x: 2880 + 180, y: 1620 + 100, w: 120, h: 150 },
-    { x: 2880 - 80, y: 1620 - 120, w: 160, h: 80 },
-    { x: 2880 - 80, y: 1620 + 40, w: 160, h: 80 },
+    // Center Barriers
+    { x: 1000 - 150, y: 1000 - 20, w: 300, h: 40 },
 
-    // Top-Left Cluster
-    { x: 500, y: 500, w: 300, h: 40 },
-    { x: 500, y: 500, w: 40, h: 300 },
-    { x: 1000, y: 800, w: 200, h: 200 },
+    // Four Pillars (scaled more outward)
+    { x: 500, y: 500, w: 80, h: 80 },
+    { x: 1420, y: 500, w: 80, h: 80 },
+    { x: 500, y: 1420, w: 80, h: 80 },
+    { x: 1420, y: 1420, w: 80, h: 80 },
 
-    // Top-Right Cluster
-    { x: 4500, y: 600, w: 400, h: 40 },
-    { x: 4700, y: 300, w: 40, h: 600 },
+    // Edge Barriers (closer to new edges)
+    { x: 150, y: 938, w: 60, h: 124 },
+    { x: 1790, y: 938, w: 60, h: 124 },
+    { x: 938, y: 150, w: 124, h: 60 },
+    { x: 938, y: 1790, w: 124, h: 60 },
 
-    // Bottom-Left Cluster
-    { x: 600, y: 2500, w: 100, h: 500 },
-    { x: 1200, y: 2400, w: 400, h: 100 },
-
-    // Bottom-Right Cluster
-    { x: 4800, y: 2500, w: 300, h: 300 },
-    { x: 4200, y: 2800, w: 500, h: 50 },
-
-    // Middle-Edge Clusters
-    { x: 100, y: 1500, w: 300, h: 100 },
-    { x: 5360, y: 1500, w: 300, h: 100 },
-    { x: 2700, y: 100, w: 400, h: 100 },
-    { x: 2700, y: 3040, w: 400, h: 100 },
-
-    // Scattered Pillars
-    { x: 1500, y: 1500, w: 60, h: 60 },
-    { x: 4000, y: 1500, w: 60, h: 60 },
-    { x: 1500, y: 2000, w: 60, h: 60 },
-    { x: 4000, y: 2000, w: 60, h: 60 },
+    // New Middle Barriers for more cover
+    { x: 300, y: 950, w: 200, h: 100 },
+    { x: 1500, y: 950, w: 200, h: 100 },
 
     // BOUNDARIES
     { x: 0, y: 0, w: WORLD_WIDTH, h: 40 },           // Top
@@ -324,6 +326,9 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => {
     const key = e.key.toLowerCase();
     if (input.hasOwnProperty(key)) input[key] = false;
+    if (key === 't') {
+        socket.emit('toggleUnlimitedAmmo');
+    }
 });
 window.addEventListener('mousemove', (e) => {
     input.mouseX = e.clientX;
@@ -343,83 +348,101 @@ socket.on('state', (data) => {
     const serverPlayers = data.players;
     const serverProjectiles = data.projectiles;
 
-    // For other players, update normally
-    for (let id in serverPlayers) {
-        if (id !== myId) {
-            players[id] = serverPlayers[id];
-        } else if (players[id]) {
-            // FOR MY PLAYER: Only update health, ammo, super, alive status
-            // TRUST LOCAL POSITION (simple prediction)
-            const me = players[id];
-            const serverMe = serverPlayers[id];
-            me.health = serverMe.health;
-            me.alive = serverMe.alive;
-            me.ammo = serverMe.ammo;
-            me.superCharge = serverMe.superCharge;
-            me.maxAmmo = serverMe.maxAmmo;
-        } else {
-            // First time receiving my data
-            players[id] = serverPlayers[id];
-        }
-    }
+    // Interpolation Setup
+    networkState.prev = networkState.current;
+    networkState.current = serverPlayers;
+    networkState.lastTime = Date.now();
 
-    // Clean up players who left
-    for (let id in players) {
-        if (!serverPlayers[id]) delete players[id];
-    }
+    // Immediate updates for non-positional data
+    if (myId && serverPlayers[myId]) {
+        const me = players[myId]; // Local player (predicted)
+        const sMe = serverPlayers[myId];
+        me.health = sMe.health;
+        me.maxHealth = sMe.maxHealth;
+        me.alive = sMe.alive;
+        me.ammo = sMe.ammo;
+        me.superCharge = sMe.superCharge;
+        me.maxAmmo = sMe.maxAmmo;
+        me.character = sMe.character;
+        me.speedMultiplier = sMe.speedMultiplier;
+        me.frozenUntil = sMe.frozenUntil;
+        me.unlimitedAmmoUntil = sMe.unlimitedAmmoUntil;
 
-    // Global projectiles from server
-    projectiles = serverProjectiles;
-
-    // Update UI
-    if (myId && players[myId]) {
-        const me = players[myId];
-        uiHealthBar.style.width = `${me.health}%`;
-        uiHealthText.innerText = `${Math.ceil(me.health)}/100`;
-
+        // UI Updates
+        uiHealthBar.style.width = `${(me.health / me.maxHealth) * 100}%`;
+        uiHealthText.innerText = `${Math.ceil(me.health)}/${me.maxHealth}`;
         uiSuperBar.style.width = `${me.superCharge}%`;
         uiSuperText.innerText = `${Math.floor(me.superCharge)}%`;
 
+        // Update ammo clips
+        uiAmmoContainer.innerHTML = '';
+        const maxAmmoSlots = me.maxAmmo || 3;
+        for (let i = 0; i < maxAmmoSlots; i++) {
+            const slot = document.createElement('div');
+            let className = 'ammo-slot';
+            if (sMe.unlimitedAmmo || (me.unlimitedAmmoUntil && Date.now() < me.unlimitedAmmoUntil)) {
+                className += ' filled unlimited';
+            } else if (i < me.ammo) {
+                className += ' filled';
+            }
+            slot.className = className;
+            uiAmmoContainer.appendChild(slot);
+        }
 
         if (me.alive) {
             deathScreen.classList.add('hidden');
         } else {
-            if (!deathScreen.classList.contains('hidden') === false) Sound.death(); // Play once on death
+            if (deathScreen.classList.contains('hidden')) Sound.death();
             deathScreen.classList.remove('hidden');
         }
 
-        // Update Ammo HUD
-        const slots = uiAmmoContainer.children;
-        for (let i = 0; i < slots.length; i++) {
-            if (i < me.ammo) {
-                slots[i].classList.add('filled');
+        // Mobile Super Button State
+        if (isMobile && uiSuperZone) {
+            if (me.superCharge >= 100) {
+                uiSuperZone.style.opacity = '1';
+                uiSuperZone.style.pointerEvents = 'auto';
             } else {
-                slots[i].classList.remove('filled');
+                uiSuperZone.style.opacity = '0.3';
+                uiSuperZone.style.pointerEvents = 'none';
             }
         }
     }
 
-    // Alive count tracking
+    // Process other players and projectiles
+    projectiles = serverProjectiles;
+    powerups = data.powerups || [];
+
     let aliveCount = 0;
-    for (let id in players) {
-        if (players[id].alive) {
-            aliveCount++;
+    for (let id in serverPlayers) {
+        if (serverPlayers[id].alive) aliveCount++;
+        // If we don't have this player yet, add them
+        if (!players[id]) {
+            players[id] = { ...serverPlayers[id] };
+        } else {
+            // SYNC properties
+            if (id !== myId) {
+                players[id].x = serverPlayers[id].x;
+                players[id].y = serverPlayers[id].y;
+                players[id].angle = serverPlayers[id].angle;
+            }
+            players[id].health = serverPlayers[id].health;
+            players[id].maxHealth = serverPlayers[id].maxHealth;
+            players[id].alive = serverPlayers[id].alive;
+            players[id].character = serverPlayers[id].character;
+            players[id].superCharge = serverPlayers[id].superCharge;
+            players[id].speedMultiplier = serverPlayers[id].speedMultiplier;
+            players[id].frozenUntil = serverPlayers[id].frozenUntil;
+            players[id].unlimitedAmmoUntil = serverPlayers[id].unlimitedAmmoUntil;
+            players[id].spinningUntil = serverPlayers[id].spinningUntil;
+            players[id].hasShield = serverPlayers[id].hasShield;
         }
     }
-    if (uiAlive) {
-        uiAlive.innerText = aliveCount;
+    // Clean up
+    for (let id in players) {
+        if (!serverPlayers[id]) delete players[id];
     }
 
-    // Mobile Super Button State
-    if (isMobile && uiSuperZone) {
-        if (me.superCharge >= 100) {
-            uiSuperZone.style.opacity = '1';
-            uiSuperZone.style.pointerEvents = 'auto';
-        } else {
-            uiSuperZone.style.opacity = '0.3';
-            uiSuperZone.style.pointerEvents = 'none';
-        }
-    }
+    if (uiAlive) uiAlive.innerText = aliveCount;
 });
 
 socket.on('collision', (data) => {
@@ -452,10 +475,12 @@ socket.on('state', (data) => {
 
 // Game Loop
 function update() {
-    if (!myId || !players[myId] || !players[myId].alive) return;
+    if (!myId || !players[myId]) return;
 
     const me = players[myId];
-    const speed = 5; // Pixels per frame
+    if (!me.alive || Date.now() < (me.frozenUntil || 0) || Date.now() < (me.spinningUntil || 0)) return;
+
+    const speed = 5 * (me.speedMultiplier || 1.0); // Pixels per frame
     let dx = 0;
     let dy = 0;
 
@@ -471,33 +496,41 @@ function update() {
         dy *= factor;
     }
 
-    // Client-side prediction (very basics)
-    const newX = me.x + dx;
-    const newY = me.y + dy;
+    // Client-side prediction with Sliding Collisions
+    const collisionRadius = 30; // Radius 25 + 5 buffer
 
-    // Wall Collision Check (Client Side)
-    // Uses global WALL_RECTS
-
-    let collided = false;
+    // Try X movement independently
+    let newX = me.x + dx;
+    let xCollided = false;
     for (const wall of WALL_RECTS) {
         const closestX = Math.max(wall.x, Math.min(newX, wall.x + wall.w));
-        const closestY = Math.max(wall.y, Math.min(newY, wall.y + wall.h));
-        const dist = Math.sqrt(Math.pow(newX - closestX, 2) + Math.pow(newY - closestY, 2));
-        if (dist < 30) { // Radius 25 + 5 buffer
-            collided = true;
+        const closestY = Math.max(wall.y, Math.min(me.y, wall.y + wall.h));
+        const dist = Math.sqrt(Math.pow(newX - closestX, 2) + Math.pow(me.y - closestY, 2));
+        if (dist < collisionRadius) {
+            xCollided = true;
             break;
         }
     }
+    if (!xCollided) me.x = newX;
 
-    if (!collided) {
-        me.x = newX;
-        me.y = newY;
+    // Try Y movement independently
+    let newY = me.y + dy;
+    let yCollided = false;
+    for (const wall of WALL_RECTS) {
+        const closestX = Math.max(wall.x, Math.min(me.x, wall.x + wall.w));
+        const closestY = Math.max(wall.y, Math.min(newY, wall.y + wall.h));
+        const dist = Math.sqrt(Math.pow(me.x - closestX, 2) + Math.pow(newY - closestY, 2));
+        if (dist < collisionRadius) {
+            yCollided = true;
+            break;
+        }
     }
+    if (!yCollided) me.y = newY;
 
     // Only calculate angle from mouse if NOT using touch joysticks
     if (!TouchControls.right.active && !TouchControls.super.active) {
-        const screenCX = VIRTUAL_WIDTH / 2;
-        const screenCY = VIRTUAL_HEIGHT / 2;
+        const screenCX = canvas.width / 2;
+        const screenCY = canvas.height / 2;
         me.angle = Math.atan2(input.mouseY - screenCY, input.mouseX - screenCX);
     }
 }
@@ -515,6 +548,7 @@ let lastSuperTime = 0;
 
 window.addEventListener('mousedown', (e) => {
     if (myId && players[myId] && players[myId].alive) {
+        if (Date.now() < (players[myId].frozenUntil || 0)) return;
         if (e.button === 0) { // Left Click - Shoot
             if (players[myId].ammo > 0 && Date.now() - lastShootTime > 300) {
                 shoot(false);
@@ -533,7 +567,13 @@ window.addEventListener('mousedown', (e) => {
 });
 
 function shoot(isSuper) {
-    if (isSuper) Sound.super(); else Sound.shoot();
+    if (isSuper) {
+        const me = players[myId];
+        if (me && me.character === 'drandrew') Sound.wave();
+        else Sound.super();
+    } else {
+        Sound.shoot();
+    }
     socket.emit('shoot', { isSuper });
 }
 
@@ -563,19 +603,17 @@ function draw() {
     }
 
     const me = players[myId];
+    const renderTime = Date.now() - INTERP_OFFSET;
 
     // Camera follows player
     camera.x = me.x - canvas.width / 2;
     camera.y = me.y - canvas.height / 2;
 
-    // Draw Ground Pattern
-    // Tiled background
+    // Optimized Background Drawing
     if (assets.ground.complete) {
+        ctx.save();
         const ptrn = ctx.createPattern(assets.ground, 'repeat');
         ctx.fillStyle = ptrn;
-        // We need to translate pattern to match camera to avoid "sliding" feel
-        // The pattern origin is 0,0. We want it to be fixed in World.
-        ctx.save();
         ctx.translate(-camera.x, -camera.y);
         ctx.fillRect(camera.x, camera.y, canvas.width, canvas.height);
         ctx.restore();
@@ -584,164 +622,304 @@ function draw() {
     ctx.save();
     ctx.translate(-camera.x, -camera.y);
 
-    // Draw Walls
+    // Draw Walls (Simplified rendering)
+    ctx.strokeStyle = '#00ff44';
+    ctx.lineWidth = 2;
     for (const wall of WALL_RECTS) {
-        ctx.save();
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = '#00ff44';
-        ctx.strokeStyle = '#00ff44';
-        ctx.lineWidth = 2;
-
-        // Outer Rect
         ctx.strokeRect(wall.x, wall.y, wall.w, wall.h);
-
-        // Inner Pattern (X)
         ctx.beginPath();
-        ctx.moveTo(wall.x, wall.y);
-        ctx.lineTo(wall.x + wall.w, wall.y + wall.h);
-        ctx.moveTo(wall.x + wall.w, wall.y);
-        ctx.lineTo(wall.x, wall.y + wall.h);
+        ctx.moveTo(wall.x, wall.y); ctx.lineTo(wall.x + wall.w, wall.y + wall.h);
+        ctx.moveTo(wall.x + wall.w, wall.y); ctx.lineTo(wall.x, wall.y + wall.h);
         ctx.stroke();
-
-        ctx.restore();
     }
 
-    // Draw Players
+    // Draw Players with Interpolation
     for (const id in players) {
         if (!players[id].alive) continue;
 
         const p = players[id];
+        let drawX = p.x;
+        let drawY = p.y;
+        let drawAngle = p.angle;
+
+        // Interpolate others
+        if (id !== myId && networkState.prev && networkState.current) {
+            const pStart = networkState.prev[id];
+            const pEnd = networkState.current[id];
+            if (pStart && pEnd) {
+                const total = networkState.lastTime - (networkState.lastTime - 50); // Rough interval
+                const t = Math.min(1, Math.max(0, (renderTime - (networkState.lastTime - INTERP_OFFSET)) / 50));
+                drawX = pStart.x + (pEnd.x - pStart.x) * t;
+                drawY = pStart.y + (pEnd.y - pStart.y) * t;
+                // Simple angle lerp
+                let diff = pEnd.angle - pStart.angle;
+                if (diff > Math.PI) diff -= Math.PI * 2;
+                if (diff < -Math.PI) diff += Math.PI * 2;
+                drawAngle = pStart.angle + diff * t;
+            }
+        }
+
         ctx.save();
-        ctx.translate(p.x, p.y);
-        ctx.rotate(p.angle);
+        ctx.translate(drawX, drawY);
+        ctx.rotate(drawAngle);
 
-        // Procedural Drawing: Geometric Art Style
         const isMe = (id === myId);
-        const primaryColor = isMe ? '#00ffff' : '#ff3300';
-        const secondaryColor = isMe ? '#0088ff' : '#991100';
+        let primaryColor = isMe ? '#00ffff' : '#ff3300';
+        let secondaryColor = isMe ? '#0088ff' : '#991100';
 
-        ctx.shadowBlur = 15;
-        ctx.shadowColor = primaryColor;
+        if (p.character === 'titus') {
+            primaryColor = isMe ? '#ffbb00' : '#ff6600';
+            secondaryColor = isMe ? '#ff8800' : '#aa4400';
+        }
 
-        // Body Circle
+        // Optimized Body Drawing (reduced shadowBlur)
+        if (isMe) {
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = primaryColor;
+        }
+
         ctx.strokeStyle = primaryColor;
         ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.arc(0, 0, 25, 0, Math.PI * 2);
         ctx.stroke();
 
-        // Inner Detail (Triangular Core)
         ctx.fillStyle = secondaryColor;
         ctx.beginPath();
-        ctx.moveTo(10, 0);
-        ctx.lineTo(-10, -8);
-        ctx.lineTo(-10, 8);
-        ctx.closePath();
+        ctx.moveTo(10, 0); ctx.lineTo(-10, -8); ctx.lineTo(-10, 8); ctx.closePath();
         ctx.fill();
 
-        // Directional Indicator / "Gun"
         ctx.strokeStyle = '#fff';
         ctx.lineWidth = 4;
         ctx.beginPath();
-        ctx.moveTo(25, 0);
-        ctx.lineTo(40, 0);
-        if (me.ammo > 0 && (TouchControls.right.active || !isMobile)) { // Only draw trajectory if aiming or on PC (mouse assumed aiming)
+        ctx.moveTo(25, 0); ctx.lineTo(40, 0);
+        ctx.stroke();
+
+        // TITUS WATCH (If spinning)
+        if (Date.now() < p.spinningUntil) {
+            ctx.rotate(Date.now() / 100);
+            ctx.strokeStyle = '#ffff00';
+            ctx.lineWidth = 3;
             ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.lineTo(40, 0); // Slightly longer aim line
+            ctx.arc(0, 0, 80, 0, Math.PI * 2); // Match server radius 80
+            ctx.stroke();
+            // Clock hands
+            ctx.moveTo(0, 0); ctx.lineTo(0, -70);
+            ctx.moveTo(0, 0); ctx.lineTo(50, 0);
             ctx.stroke();
         }
 
-        ctx.shadowBlur = 0;
+        // DR ANDREW SHIELD
+        if (p.hasShield) {
+            ctx.strokeStyle = '#00ffff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(0, 0, 35, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.globalAlpha = 0.2;
+            ctx.fillStyle = '#00ffff';
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+        }
+
         ctx.restore();
 
-        // Super Trajectory (for Mobile Super Stick)
-        if (isMobile && TouchControls.super.active && id === myId && me.superCharge >= 100) {
-            ctx.save();
-            ctx.translate(p.x, p.y);
-            ctx.rotate(TouchControls.super.angle);
-            ctx.strokeStyle = '#ff00ff';
-            ctx.lineWidth = 4;
-            ctx.setLineDash([10, 5]);
-            ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.lineTo(80, 0); // Slightly longer super line
-            ctx.stroke();
-            ctx.restore();
-        }
-
-        // World-Space UI (Above head)
+        // UI Above Head
         const barWidth = 60;
         const barHeight = 8;
-        const barY = p.y - 50;
+        const barY = drawY - 50;
 
-        // Health Bar
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-        ctx.fillRect(p.x - barWidth / 2, barY, barWidth, barHeight);
-        ctx.fillStyle = id === myId ? '#00ff00' : '#ff0000';
-        ctx.fillRect(p.x - barWidth / 2, barY, barWidth * (p.health / 100), barHeight);
+        // Health Bar Background & Border
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(drawX - barWidth / 2, barY, barWidth, barHeight);
         ctx.strokeStyle = '#fff';
         ctx.lineWidth = 1;
-        ctx.strokeRect(p.x - barWidth / 2, barY, barWidth, barHeight);
+        ctx.strokeRect(drawX - barWidth / 2, barY, barWidth, barHeight);
 
-        // Ammo Bar (Only for local player)
+        // Health Fill
+        ctx.fillStyle = id === myId ? '#00ff44' : '#ff3300';
+        if (p.character === 'titus') ctx.fillStyle = '#ffbb00';
+        if (p.character === 'drandrew') ctx.fillStyle = '#00ffff';
+        ctx.fillRect(drawX - barWidth / 2, barY, barWidth * (p.health / (p.maxHealth || 100)), barHeight);
+
+        // Character Name & Health Text Above Bar
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 12px Arial';
+        ctx.textAlign = 'center';
+        const name = p.character === 'titus' ? 'Titus' : (p.character === 'drandrew' ? 'Dr. Andrew' : 'Player');
+        ctx.fillText(`${name} ${Math.ceil(p.health)}/${p.maxHealth || 100}`, drawX, barY - 5);
+
+        // Ammo Bar (Local Player Only)
         if (id === myId) {
-            const ammoBarY = barY - 12;
-            const ammoSegmentWidth = barWidth / p.maxAmmo;
-            for (let i = 0; i < p.maxAmmo; i++) {
-                ctx.fillStyle = i < p.ammo ? '#ffcc00' : 'rgba(100, 100, 100, 0.5)';
-                ctx.fillRect(p.x - barWidth / 2 + i * ammoSegmentWidth, ammoBarY, ammoSegmentWidth - 1, 6);
+            const ammoBarY = barY + barHeight + 5;
+            const ammoGap = 4;
+            const maxAmmo = p.maxAmmo || 3;
+            const segWidth = (barWidth - (ammoGap * (maxAmmo - 1))) / maxAmmo;
+
+            for (let i = 0; i < maxAmmo; i++) {
+                const segX = (drawX - barWidth / 2) + (i * (segWidth + ammoGap));
+
+                // Background & Border
+                ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                ctx.fillRect(segX, ammoBarY, segWidth, 6);
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(segX, ammoBarY, segWidth, 6);
+
+                // Fill if ammo exists
+                if (i < p.ammo) {
+                    ctx.fillStyle = '#ffff00';
+                    ctx.fillRect(segX, ammoBarY, segWidth, 6);
+                }
             }
-            ctx.strokeRect(p.x - barWidth / 2, ammoBarY, barWidth, 6);
         }
     }
 
+    // Projectiles
     projectiles.forEach(proj => {
         ctx.save();
         ctx.translate(proj.x, proj.y);
 
-        const isSuper = proj.isSuper;
-        const color = isSuper ? '#ff00ff' : (proj.owner === myId ? '#00ffff' : '#ff0000');
+        if (proj.type === 'fireloop') {
+            ctx.rotate(Date.now() / 100);
+            ctx.strokeStyle = '#ffbb00';
+            ctx.lineWidth = 4;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = '#ff4400';
 
-        ctx.shadowBlur = isSuper ? 20 : 10;
-        ctx.shadowColor = color;
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-
-        if (isSuper) {
-            // Drawn as a star/pulsing diamond
+            // Rings
             ctx.beginPath();
-            for (let i = 0; i < 8; i++) {
-                const angle = (i * Math.PI) / 4;
-                const r = i % 2 === 0 ? 25 : 10;
-                ctx.lineTo(Math.cos(angle) * r, Math.sin(angle) * r);
+            ctx.arc(0, 0, 12, 0, Math.PI * 2);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(0, 0, 18, 0, Math.PI * 2);
+            ctx.strokeStyle = '#ff4400';
+            ctx.stroke();
+
+            // Rotating Fire Orbit
+            for (let i = 0; i < 3; i++) {
+                ctx.rotate(Math.PI * 2 / 3);
+                ctx.fillStyle = '#ffcc00';
+                ctx.beginPath();
+                ctx.arc(20, 0, 4, 0, Math.PI * 2);
+                ctx.fill();
             }
-            ctx.closePath();
-            ctx.stroke();
-            ctx.fillStyle = 'rgba(255, 0, 255, 0.2)';
-            ctx.fill();
-        } else {
-            // Drawn as a glowing orb with a trail line
+        } else if (proj.type === 'watch') {
+            ctx.strokeStyle = '#ffff00';
+            ctx.lineWidth = 4;
             ctx.beginPath();
-            ctx.arc(0, 0, 8, 0, Math.PI * 2);
+            ctx.arc(0, 0, 80, 0, Math.PI * 2); // Match server radius 80
             ctx.stroke();
+            ctx.moveTo(0, 0); ctx.lineTo(0, -60);
+            ctx.rotate(Date.now() / 50);
+            ctx.lineTo(40, 0);
+            ctx.stroke();
+        } else if (proj.type === 'lightning' || proj.type === 'lightningwave') {
+            const angle = Math.atan2(proj.vy, proj.vx);
+            ctx.rotate(angle);
+            ctx.strokeStyle = '#ffffff';
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#00ffff';
+            ctx.lineWidth = proj.type === 'lightningwave' ? 8 : 3;
+            ctx.beginPath();
 
-            // Short trail
+            if (proj.type === 'lightningwave') {
+                // Draw a wide curved wave
+                const width = 200; // Radius from server
+                const segments = 20;
+                const curve = 40; // How much it bends forward in the middle
+
+                ctx.moveTo(0, -width);
+                for (let i = -width; i <= width; i += width * 2 / segments) {
+                    const offset = (1 - Math.pow(i / width, 2)) * curve;
+                    const jitter = (Math.random() - 0.5) * 15;
+                    ctx.lineTo(offset + jitter, i);
+                }
+            } else {
+                // Draw along X axis (direction of travel)
+                // Length of visual bolt
+                const len = 40;
+                ctx.moveTo(-len / 2, 0);
+
+                // Jagged segments along X
+                for (let x = -len / 2; x < len / 2; x += 5) {
+                    ctx.lineTo(x, (Math.random() - 0.5) * 10);
+                }
+                ctx.lineTo(len / 2, 0);
+            }
+            ctx.stroke();
+        } else {
+            const color = proj.isSuper ? '#ff00ff' : (proj.owner === myId ? '#00ffff' : '#ff0000');
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
             ctx.beginPath();
-            ctx.moveTo(0, 0);
-            const dx = proj.vx / 5;
-            const dy = proj.vy / 5;
-            ctx.lineTo(-dx * 10, -dy * 10);
+            ctx.arc(0, 0, proj.isSuper ? 15 : 6, 0, Math.PI * 2);
             ctx.stroke();
         }
         ctx.restore();
     });
-    ctx.shadowBlur = 0;
+
+    // Lightning Tethers
+    for (let i = lightningTethers.length - 1; i >= 0; i--) {
+        const t = lightningTethers[i];
+        const p1 = players[t.p1];
+        const p2 = players[t.p2];
+        if (p1 && p2 && p1.alive && p2.alive) {
+            ctx.strokeStyle = '#00ffff';
+            ctx.lineWidth = 2;
+            ctx.globalAlpha = t.life;
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            // Jagged line
+            let dx = p2.x - p1.x;
+            let dy = p2.y - p1.y;
+            let dist = Math.sqrt(dx * dx + dy * dy);
+            for (let j = 0; j < dist; j += 20) {
+                let tx = p1.x + (dx * j / dist) + (Math.random() - 0.5) * 20;
+                let ty = p1.y + (dy * j / dist) + (Math.random() - 0.5) * 20;
+                ctx.lineTo(tx, ty);
+            }
+            ctx.lineTo(p2.x, p2.y);
+            ctx.stroke();
+        }
+        t.life -= 0.05;
+        if (t.life <= 0) lightningTethers.splice(i, 1);
+    }
+    ctx.globalAlpha = 1.0;
+
+    // Draw Power-ups
+    powerups.forEach(pu => {
+        ctx.save();
+        ctx.translate(pu.x, pu.y);
+
+        let color = '#fff';
+        let label = '';
+        if (pu.type === 'speed') { color = '#ffff00'; label = 'S'; }
+        if (pu.type === 'unlimitedAmmo') { color = '#00ffff'; label = 'A'; }
+        if (pu.type === 'freeze') { color = '#3366ff'; label = 'F'; }
+
+        // Glow
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = color;
+
+        // Box
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(-20, -20, 40, 40);
+
+        // Symbol
+        ctx.fillStyle = color;
+        ctx.font = 'bold 20px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, 0, 0);
+
+        ctx.restore();
+    });
 
     Effects.draw(ctx);
-
     drawMinimap();
-
     ctx.restore();
     requestAnimationFrame(draw);
 }
@@ -774,3 +952,18 @@ function drawMinimap() {
         minimapCtx.fill();
     }
 }
+
+socket.on('lightningTether', (data) => {
+    lightningTethers.push({ ...data, life: 1.0 });
+});
+
+// Selection Screen Handlers
+function joinGame(character) {
+    myCharacter = character;
+    selectionScreen.classList.add('hidden');
+    uiLayer.classList.remove('hidden');
+    socket.emit('join', { character });
+}
+
+if (btnTitus) btnTitus.onclick = () => joinGame('titus');
+if (btnAndrew) btnAndrew.onclick = () => joinGame('andrew');

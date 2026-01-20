@@ -20,7 +20,27 @@
 </head>
 
 <body>
-    <div id="ui-layer">
+    <div id="selection-screen">
+        <div class="selection-container">
+            <h1>Choose Your Character</h1>
+            <div class="character-cards">
+                <div class="char-card" id="select-titus">
+                    <div class="char-img titus"></div>
+                    <h2>Titus the Ancient</h2>
+                    <p>Health: 120 | Ammo: 4</p>
+                    <p class="desc">Attacks with fire loops. Super spinning watch traps enemies.</p>
+                </div>
+                <div class="char-card" id="select-andrew">
+                    <div class="char-img andrew"></div>
+                    <h2>Dr. Andrew</h2>
+                    <p>Health: 110 | Ammo: 3</p>
+                    <p class="desc">Lightning attacks that chain to nearby enemies.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="ui-layer" class="hidden">
         <div id="hud-top">
             <div class="score-board">Alive: <span id="alive-count">0</span></div>
         </div>
