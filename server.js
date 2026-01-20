@@ -15,6 +15,7 @@ let deadPlayers = {}; // { id: deathTime }
 let projectiles = []; // GLOBAL authoritative projectile list
 let powerups = []; // { id, x, y, type }
 let tethers = []; // { id: 'p1-p2', p1, p2, endTime }
+let iceTrails = []; // { id, x, y, owner, endTime }
 
 // World Dimensions
 const WORLD_WIDTH = 2000;
@@ -152,7 +153,19 @@ io.on('connection', (socket) => {
             frozenUntil: 0,
             spinningUntil: 0,
             speedUntil: 0,
+            dashingUntil: 0,
+            dashDx: 0,
+            dashDy: 0
         };
+
+        if (character === 'hyperswag') {
+            players[socket.id].health = 150;
+            players[socket.id].maxHealth = 150;
+            players[socket.id].color = '#00ffff';
+            players[socket.id].ammo = 3;
+            players[socket.id].maxAmmo = 3;
+            players[socket.id].reloadDelay = 1500;
+        }
 
         socket.emit('init', { id: socket.id, players });
     });
@@ -179,6 +192,44 @@ io.on('connection', (socket) => {
 
         if (Date.now() < player.frozenUntil) {
             return;
+        }
+
+        // Handle Dashing
+        if (Date.now() < player.dashingUntil) {
+            // Move player in dash direction
+            let nextX = player.x + player.dashDx * 25;
+            let nextY = player.y + player.dashDy * 25;
+
+            // Check walls
+            if (!isCollidingWithWalls(nextX, nextY, 25)) {
+                player.x = nextX;
+                player.y = nextY;
+            }
+
+            // Leave Ice Trail
+            if (player.character === 'hyperswag') {
+                iceTrails.push({
+                    id: Math.random().toString(36).substr(2, 9),
+                    x: player.x,
+                    y: player.y,
+                    owner: socket.id,
+                    endTime: Date.now() + 5000 // 5s duration
+                });
+            }
+
+            // Check enemy collision during dash
+            for (let pid in players) {
+                let p = players[pid];
+                if (pid !== socket.id && p.alive) {
+                    const dist = Math.sqrt(Math.pow(player.x - p.x, 2) + Math.pow(player.y - p.y, 2));
+                    if (dist < 60) { // Large hit radius for dash
+                        p.health -= 20;
+                        p.lastDamageTime = Date.now();
+                        player.superCharge = 100; // Recharge super as requested
+                        io.emit('collision', { x: player.x, y: player.y, type: 'player', damage: 20, victim: pid });
+                    }
+                }
+            }
         }
     });
 
@@ -218,7 +269,7 @@ io.on('connection', (socket) => {
                 radius: isSuper ? 80 : 35, // Titus attack is big, Super is HUGE
                 hitIds: [] // Track players already hit by this projectile
             });
-        } else {
+        } else if (player.character === 'drandrew') {
             // Dr. Andrew
             if (isSuper) {
                 projectiles.push({
@@ -247,6 +298,49 @@ io.on('connection', (socket) => {
                     color: '#00ffff',
                     radius: 20
                 });
+            }
+        } else if (player.character === 'hyperswag') {
+            if (isSuper) {
+                player.dashingUntil = now + 500; // 0.5s dash
+                player.dashDx = dx;
+                player.dashDy = dy;
+            } else {
+                // Two punch attack
+                // First punch
+                projectiles.push({
+                    id: Math.random().toString(36).substr(2, 9),
+                    type: 'punch',
+                    x: player.x + dx * 30,
+                    y: player.y + dy * 30,
+                    vx: 0, // Stationary
+                    vy: 0,
+                    startTime: Date.now(),
+                    owner: socket.id,
+                    color: '#00ffff',
+                    radius: 40, // Slightly larger hit area for melee
+                    duration: 150 // Short lived
+                });
+                // Second punch delayed
+                setTimeout(() => {
+                    if (players[socket.id] && players[socket.id].alive) {
+                        const me = players[socket.id];
+                        const mdx = Math.cos(me.angle);
+                        const mdy = Math.sin(me.angle);
+                        projectiles.push({
+                            id: Math.random().toString(36).substr(2, 9),
+                            type: 'punch',
+                            x: me.x + mdx * 50, // Slightly further out
+                            y: me.y + mdy * 50,
+                            vx: 0,
+                            vy: 0,
+                            startTime: Date.now(),
+                            owner: socket.id,
+                            color: '#00ffff',
+                            radius: 40,
+                            duration: 150
+                        });
+                    }
+                }, 150);
             }
         }
     });
@@ -351,6 +445,32 @@ setInterval(() => {
         if (player.speedUntil > 0 && now > player.speedUntil) {
             player.speedMultiplier = 1.0;
             player.speedUntil = 0;
+        }
+
+        // HyperSwag Ice Trail Interaction
+        let onIce = false;
+        let isOwnIce = false;
+        for (let i = iceTrails.length - 1; i >= 0; i--) {
+            let trail = iceTrails[i];
+            if (now > trail.endTime) {
+                iceTrails.splice(i, 1);
+                continue;
+            }
+            const dist = Math.sqrt(Math.pow(player.x - trail.x, 2) + Math.pow(player.y - trail.y, 2));
+            if (dist < 40) {
+                onIce = true;
+                if (trail.owner === id) isOwnIce = true;
+            }
+        }
+
+        if (onIce) {
+            if (isOwnIce) {
+                player.speedMultiplier = 2.0;
+                player.speedUntil = now + 100; // Keep it active as long as on ice
+            } else {
+                player.speedMultiplier = 0.5;
+                player.speedUntil = now + 100;
+            }
         }
 
         // Powerup Collision
@@ -514,6 +634,7 @@ setInterval(() => {
                             else if (proj.type === 'lightning') chargeAmount = 25;
                             else if (proj.type === 'lightningwave') chargeAmount = 15; // Wave hits many, lower charge per hit
                             else if (proj.type === 'watch') chargeAmount = 10;
+                            else if (proj.type === 'punch') chargeAmount = 12.5; // 8 punches (4 full attacks) for 100%
                             else chargeAmount = 20;
 
                             players[proj.owner].superCharge = Math.min(100, (players[proj.owner].superCharge || 0) + chargeAmount);
@@ -535,7 +656,7 @@ setInterval(() => {
             }
         }
 
-        const hit = hitBoundary || hitPlayer || Math.abs(proj.x) > 6000 || Math.abs(proj.y) > 4000;
+        const hit = hitBoundary || hitPlayer || Math.abs(proj.x) > 6000 || Math.abs(proj.y) > 4000 || (proj.duration && now > (proj.startTime + proj.duration));
         if (hit) {
             projectiles.splice(i, 1);
         }
@@ -563,7 +684,7 @@ function applyPowerUp(playerId, type, now) {
 
 // Broadcast Loop (20Hz) - Reduces bandwidth and congestion
 setInterval(() => {
-    io.emit('state', { players, projectiles, powerups, ts: Date.now() });
+    io.emit('state', { players, projectiles, powerups, iceTrails, ts: Date.now() });
 }, 1000 / 20);
 
 const PORT = process.env.PORT || 3000;
