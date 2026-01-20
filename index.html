@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Neon War Arena</title>
+    <meta name="description"
+        content="Play Neon War Arena - A fast-paced top-down multiplayer shooter. Battle players online in a neon-soaked arena with unique abilities and weapons. Free to play in your browser!">
+    <meta name="keywords" content="multiplayer, shooter, io game, neon, browser game, arena, free to play">
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Neon War Arena - Multiplayer Online Shooter">
+    <meta property="og:description"
+        content="Join the battle in Neon War Arena! Fast-paced tactical combat in your browser.">
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div id="selection-screen">
+        <div class="selection-container">
+            <h1>Choose Your Character</h1>
+            <div class="character-cards">
+                <div class="char-card" id="select-titus">
+                    <div class="char-img titus"></div>
+                    <h2>Titus the Ancient</h2>
+                    <p>Health: 120 | Ammo: 4</p>
+                    <p class="desc">Attacks with fire loops. Super spinning watch traps enemies.</p>
+                </div>
+                <div class="char-card" id="select-andrew">
+                    <div class="char-img andrew"></div>
+                    <h2>Dr. Andrew</h2>
+                    <p>Health: 110 | Ammo: 3</p>
+                    <p class="desc">Lightning attacks that chain to nearby enemies.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="ui-layer" class="hidden">
+        <div id="hud-top">
+            <div class="score-board">Alive: <span id="alive-count">0</span></div>
+        </div>
+
+        <div id="minimap-container">
+            <canvas id="minimapCanvas" width="200" height="112"></canvas>
+        </div>
+
+        <div id="hud-bottom">
+            <div class="stat-box">
+                <div class="label">HEALTH</div>
+                <div class="bar-container">
+                    <div id="health-bar" class="bar-fill"></div>
+                </div>
+                <div id="health-text">100/100</div>
+            </div>
+
+            <div class="stat-box">
+                <div class="label">AMMO</div>
+                <div id="ammo-container" class="ammo-slots">
+                    <div class="ammo-slot filled"></div>
+                    <div class="ammo-slot filled"></div>
+                    <div class="ammo-slot filled"></div>
+                </div>
+            </div>
+
+            <div class="stat-box">
+                <div class="label">SUPER CHARGE</div>
+                <div class="bar-container">
+                    <div id="super-bar" class="bar-fill super"></div>
+                </div>
+                <div id="super-text">0%</div>
+            </div>
+        </div>
+
+        <div id="death-screen" class="hidden">
+            <h1>YOU DIED</h1>
+            <p>Respawning in <span id="respawn-timer">5</span>...</p>
+        </div>
+
+        <!-- Mobile Controls (Hidden by default, shown via CSS/JS on touch devices) -->
+        <div id="mobile-controls" class="hidden">
+            <div id="joystick-zone-left" class="joystick-zone">
+                <div id="joystick-move" class="joystick">
+                    <div class="stick"></div>
+                </div>
+            </div>
+            <div id="joystick-zone-right" class="joystick-zone">
+                <div id="joystick-aim" class="joystick">
+                    <div class="stick"></div>
+                </div>
+            </div>
+            <div id="super-btn-zone">
+                <div id="super-btn" class="joystick super-joy">
+                    <div class="stick">S</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="client.js"></script>
+</body>
+
+</html>
