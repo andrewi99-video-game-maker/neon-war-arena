@@ -365,3 +365,11 @@ body {
 .char-img.andrew::after {
     content: "⚡";
 }
+
+.char-img.hyperswag {
+    background: linear-gradient(135deg, #00ffff, #ffffff);
+}
+
+.char-img.hyperswag::after {
+    content: "🧊";
+}

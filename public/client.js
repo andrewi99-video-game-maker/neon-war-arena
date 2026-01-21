@@ -115,6 +115,7 @@ let myCharacter = null;
 let players = {};
 let powerups = [];
 let lightningTethers = []; // { p1, p2, life }
+let iceTrails = []; // { x, y, owner, life }
 let projectiles = []; // Client-side projectile simulation for local responsiveness
 let camera = { x: 0, y: 0 };
 let lastShootTime = 0;
@@ -411,6 +412,7 @@ socket.on('state', (data) => {
     // Process other players and projectiles
     projectiles = serverProjectiles;
     powerups = data.powerups || [];
+    iceTrails = data.iceTrails || [];
 
     let aliveCount = 0;
     for (let id in serverPlayers) {
@@ -633,6 +635,24 @@ function draw() {
         ctx.stroke();
     }
 
+    // Draw Ice Trails
+    iceTrails.forEach(trail => {
+        ctx.save();
+        ctx.translate(trail.x, trail.y);
+        ctx.fillStyle = 'rgba(0, 255, 255, 0.3)';
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = '#00ffff';
+        ctx.beginPath();
+        ctx.arc(0, 0, 40, 0, Math.PI * 2);
+        ctx.fill();
+        // Add some "ice" sparkles
+        ctx.fillStyle = '#fff';
+        for (let i = 0; i < 3; i++) {
+            ctx.fillRect((Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40, 2, 2);
+        }
+        ctx.restore();
+    });
+
     // Draw Players with Interpolation
     for (const id in players) {
         if (!players[id].alive) continue;
@@ -670,6 +690,9 @@ function draw() {
         if (p.character === 'titus') {
             primaryColor = isMe ? '#ffbb00' : '#ff6600';
             secondaryColor = isMe ? '#ff8800' : '#aa4400';
+        } else if (p.character === 'hyperswag') {
+            primaryColor = isMe ? '#00ffff' : '#88ffff';
+            secondaryColor = isMe ? '#ffffff' : '#ccffff';
         }
 
         // Optimized Body Drawing (reduced shadowBlur)
@@ -740,13 +763,14 @@ function draw() {
         ctx.fillStyle = id === myId ? '#00ff44' : '#ff3300';
         if (p.character === 'titus') ctx.fillStyle = '#ffbb00';
         if (p.character === 'drandrew') ctx.fillStyle = '#00ffff';
+        if (p.character === 'hyperswag') ctx.fillStyle = '#ffffff';
         ctx.fillRect(drawX - barWidth / 2, barY, barWidth * (p.health / (p.maxHealth || 100)), barHeight);
 
         // Character Name & Health Text Above Bar
         ctx.fillStyle = '#fff';
         ctx.font = 'bold 12px Arial';
         ctx.textAlign = 'center';
-        const name = p.character === 'titus' ? 'Titus' : (p.character === 'drandrew' ? 'Dr. Andrew' : 'Player');
+        const name = p.character === 'titus' ? 'Titus' : (p.character === 'drandrew' ? 'Dr. Andrew' : (p.character === 'hyperswag' ? 'HyperSwag' : 'Player'));
         ctx.fillText(`${name} ${Math.ceil(p.health)}/${p.maxHealth || 100}`, drawX, barY - 5);
 
         // Ammo Bar (Local Player Only)
@@ -848,6 +872,17 @@ function draw() {
                 }
                 ctx.lineTo(len / 2, 0);
             }
+            ctx.stroke();
+        } else if (proj.type === 'punch') {
+            ctx.strokeStyle = '#00ffff';
+            ctx.lineWidth = 3;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(0, 0, 30, -Math.PI / 4, Math.PI / 4); // Fist arc
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(0, 0, 20, -Math.PI / 4, Math.PI / 4);
             ctx.stroke();
         } else {
             const color = proj.isSuper ? '#ff00ff' : (proj.owner === myId ? '#00ffff' : '#ff0000');
@@ -967,3 +1002,5 @@ function joinGame(character) {
 
 if (btnTitus) btnTitus.onclick = () => joinGame('titus');
 if (btnAndrew) btnAndrew.onclick = () => joinGame('andrew');
+const btnHyperSwag = document.getElementById('select-hyperswag');
+if (btnHyperSwag) btnHyperSwag.onclick = () => joinGame('hyperswag');
