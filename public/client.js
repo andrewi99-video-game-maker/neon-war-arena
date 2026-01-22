@@ -4,6 +4,7 @@ const socket = io();
 
 // UI Elements
 const uiAlive = document.getElementById('alive-count');
+const uiKills = document.getElementById('kill-count');
 const uiHealthBar = document.getElementById('health-bar');
 const uiHealthText = document.getElementById('health-text');
 const uiSuperBar = document.getElementById('super-bar');
@@ -284,6 +285,29 @@ if (isMobile) {
 const WORLD_WIDTH = 2000;
 const WORLD_HEIGHT = 2000;
 
+const BUSH_RECTS = [
+    // Corner Thickets
+    { x: 100, y: 100, w: 300, h: 300 },
+    { x: 1600, y: 100, w: 300, h: 300 },
+    { x: 100, y: 1600, w: 300, h: 300 },
+    { x: 1600, y: 1600, w: 300, h: 300 },
+
+    // Side Thickets
+    { x: 50, y: 800, w: 150, h: 400 },
+    { x: 1800, y: 800, w: 150, h: 400 },
+    { x: 800, y: 50, w: 400, h: 150 },
+    { x: 800, y: 1800, w: 400, h: 150 },
+
+    // Middle/Pillar Clusters
+    { x: 450, y: 450, w: 200, h: 200 },
+    { x: 1350, y: 450, w: 200, h: 200 },
+    { x: 450, y: 1350, w: 200, h: 200 },
+    { x: 1350, y: 1350, w: 200, h: 200 },
+
+    // Central Ambush
+    { x: 925, y: 925, w: 150, h: 150 }
+];
+
 const WALL_RECTS = [
     // Center Barriers
     { x: 1000 - 150, y: 1000 - 20, w: 300, h: 40 },
@@ -368,8 +392,10 @@ socket.on('state', (data) => {
         me.speedMultiplier = sMe.speedMultiplier;
         me.frozenUntil = sMe.frozenUntil;
         me.unlimitedAmmoUntil = sMe.unlimitedAmmoUntil;
+        me.kills = sMe.kills || 0;
 
         // UI Updates
+        if (uiKills) uiKills.innerText = me.kills;
         uiHealthBar.style.width = `${(me.health / me.maxHealth) * 100}%`;
         uiHealthText.innerText = `${Math.ceil(me.health)}/${me.maxHealth}`;
         uiSuperBar.style.width = `${me.superCharge}%`;
@@ -437,11 +463,14 @@ socket.on('state', (data) => {
             players[id].unlimitedAmmoUntil = serverPlayers[id].unlimitedAmmoUntil;
             players[id].spinningUntil = serverPlayers[id].spinningUntil;
             players[id].hasShield = serverPlayers[id].hasShield;
+            players[id].dashingUntil = serverPlayers[id].dashingUntil;
+            players[id].dashDx = serverPlayers[id].dashDx;
+            players[id].dashDy = serverPlayers[id].dashDy;
         }
     }
     // Clean up
     for (let id in players) {
-        if (!serverPlayers[id]) delete players[id];
+        if (!serverPlayers[id] && id !== myId) delete players[id];
     }
 
     if (uiAlive) uiAlive.innerText = aliveCount;
@@ -481,6 +510,33 @@ function update() {
 
     const me = players[myId];
     if (!me.alive || Date.now() < (me.frozenUntil || 0) || Date.now() < (me.spinningUntil || 0)) return;
+
+    // CLIENT-SIDE DASH PREDICTION
+    if (Date.now() < (me.dashingUntil || 0)) {
+        const dashSpeed = 25;
+        const dx = me.dashDx || 0;
+        const dy = me.dashDy || 0;
+
+        let nextX = me.x + dx * dashSpeed;
+        let nextY = me.y + dy * dashSpeed;
+
+        // Visual collision check (rough)
+        let collided = false;
+        for (const wall of WALL_RECTS) {
+            const closestX = Math.max(wall.x, Math.min(nextX, wall.x + wall.w));
+            const closestY = Math.max(wall.y, Math.min(nextY, wall.y + wall.h));
+            const dist = Math.sqrt(Math.pow(nextX - closestX, 2) + Math.pow(nextY - closestY, 2));
+            if (dist < 30) {
+                collided = true;
+                break;
+            }
+        }
+        if (!collided) {
+            me.x = nextX;
+            me.y = nextY;
+        }
+        return; // Skip manual movement while dashing
+    }
 
     const speed = 5 * (me.speedMultiplier || 1.0); // Pixels per frame
     let dx = 0;
@@ -569,14 +625,34 @@ window.addEventListener('mousedown', (e) => {
 });
 
 function shoot(isSuper) {
+    let payload = { isSuper };
+
     if (isSuper) {
         const me = players[myId];
-        if (me && me.character === 'drandrew') Sound.wave();
-        else Sound.super();
+        if (me) {
+            if (me.character === 'drandrew') Sound.wave();
+            else Sound.super();
+
+            // HyperSwag Super: Send Target Coordinates
+            if (me.character === 'hyperswag') {
+                // Calculate World Coordinates from Mouse/Camera
+                // camera.x is top-left of screen in world coords
+                // input.mouseX is screen coords
+                payload.targetX = camera.x + input.mouseX;
+                payload.targetY = camera.y + input.mouseY;
+
+                // Mobile override (approximate direction -> distance)
+                if (TouchControls.super.active) {
+                    const range = 400; // Fixed dash range for mobile stick
+                    payload.targetX = me.x + Math.cos(TouchControls.super.angle) * range;
+                    payload.targetY = me.y + Math.sin(TouchControls.super.angle) * range;
+                }
+            }
+        }
     } else {
         Sound.shoot();
     }
-    socket.emit('shoot', { isSuper });
+    socket.emit('shoot', payload);
 }
 
 // Update Loop Frequency
@@ -634,6 +710,30 @@ function draw() {
         ctx.moveTo(wall.x + wall.w, wall.y); ctx.lineTo(wall.x, wall.y + wall.h);
         ctx.stroke();
     }
+
+    // Draw Bushes
+    ctx.save();
+    for (const bush of BUSH_RECTS) {
+        ctx.fillStyle = 'rgba(20, 60, 20, 0.7)';
+        ctx.strokeStyle = '#228822';
+        ctx.lineWidth = 2;
+
+        // Main Bush Box
+        ctx.fillRect(bush.x, bush.y, bush.w, bush.h);
+        ctx.strokeRect(bush.x, bush.y, bush.w, bush.h);
+
+        // Clumpy Leaf Details
+        ctx.fillStyle = 'rgba(30, 100, 30, 0.8)';
+        const count = Math.floor((bush.w * bush.h) / 3000); // Scale with size
+        for (let i = 0; i < count; i++) {
+            const rx = bush.x + (i * 37 % bush.w);
+            const ry = bush.y + (i * 23 % bush.h);
+            ctx.beginPath();
+            ctx.arc(rx, ry, 15, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+    ctx.restore();
 
     // Draw Ice Trails
     iceTrails.forEach(trail => {
@@ -845,7 +945,7 @@ function draw() {
             ctx.strokeStyle = '#ffffff';
             ctx.shadowBlur = 15;
             ctx.shadowColor = '#00ffff';
-            ctx.lineWidth = proj.type === 'lightningwave' ? 8 : 3;
+            ctx.lineWidth = proj.type === 'lightningwave' ? 8 : 9;
             ctx.beginPath();
 
             if (proj.type === 'lightningwave') {
@@ -863,7 +963,7 @@ function draw() {
             } else {
                 // Draw along X axis (direction of travel)
                 // Length of visual bolt
-                const len = 40;
+                const len = 100;
                 ctx.moveTo(-len / 2, 0);
 
                 // Jagged segments along X
@@ -1001,6 +1101,6 @@ function joinGame(character) {
 }
 
 if (btnTitus) btnTitus.onclick = () => joinGame('titus');
-if (btnAndrew) btnAndrew.onclick = () => joinGame('andrew');
+if (btnAndrew) btnAndrew.onclick = () => joinGame('drandrew');
 const btnHyperSwag = document.getElementById('select-hyperswag');
 if (btnHyperSwag) btnHyperSwag.onclick = () => joinGame('hyperswag');

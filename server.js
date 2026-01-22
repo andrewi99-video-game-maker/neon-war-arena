@@ -48,6 +48,29 @@ const WALL_RECTS = [
     { x: WORLD_WIDTH - 40, y: 0, w: 40, h: WORLD_HEIGHT } // Right
 ];
 
+const BUSH_RECTS = [
+    // Corner Thickets
+    { x: 100, y: 100, w: 300, h: 300 },
+    { x: 1600, y: 100, w: 300, h: 300 },
+    { x: 100, y: 1600, w: 300, h: 300 },
+    { x: 1600, y: 1600, w: 300, h: 300 },
+
+    // Side Thickets
+    { x: 50, y: 800, w: 150, h: 400 },
+    { x: 1800, y: 800, w: 150, h: 400 },
+    { x: 800, y: 50, w: 400, h: 150 },
+    { x: 800, y: 1800, w: 400, h: 150 },
+
+    // Middle/Pillar Clusters
+    { x: 450, y: 450, w: 200, h: 200 },
+    { x: 1350, y: 450, w: 200, h: 200 },
+    { x: 450, y: 1350, w: 200, h: 200 },
+    { x: 1350, y: 1350, w: 200, h: 200 },
+
+    // Central Ambush
+    { x: 925, y: 925, w: 150, h: 150 }
+];
+
 const POWERUP_TYPES = ['speed', 'unlimitedAmmo', 'freeze'];
 const POWERUP_RADIUS = 20;
 let lastPowerupSpawnTime = Date.now();
@@ -98,6 +121,20 @@ function spawnPowerUp() {
     });
 }
 
+function handleDeath(victimId, killerId) {
+    const victim = players[victimId];
+    if (!victim || !victim.alive) return;
+
+    victim.health = 0;
+    victim.alive = false;
+    deadPlayers[victimId] = Date.now();
+
+    if (killerId && players[killerId] && killerId !== victimId) {
+        players[killerId].kills = (players[killerId].kills || 0) + 1;
+        io.emit('killNotification', { killer: killerId, victim: victimId });
+    }
+}
+
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
     // Default spawning (as Titus) so health is correct immediately
@@ -124,6 +161,8 @@ io.on('connection', (socket) => {
         frozenUntil: 0,
         spinningUntil: 0,
         speedUntil: 0,
+        kills: 0,
+        lastShootTime: 0,
     };
     socket.emit('init', { id: socket.id, players });
 
@@ -155,7 +194,11 @@ io.on('connection', (socket) => {
             speedUntil: 0,
             dashingUntil: 0,
             dashDx: 0,
-            dashDy: 0
+            dashDx: 0,
+            dashDy: 0,
+            dashHitIds: [], // Track unique hits per dash
+            kills: 0,
+            lastShootTime: 0
         };
 
         if (character === 'hyperswag') {
@@ -179,58 +222,16 @@ io.on('connection', (socket) => {
         let moveY = data.y;
         let moveAngle = data.angle;
 
-        if (Date.now() < player.spinningUntil) {
-            moveAngle += 0.2; // Spin
-            // Lock position when spinning
-            moveX = player.x;
-            moveY = player.y;
-        }
-
-        player.x = moveX;
-        player.y = moveY;
-        player.angle = moveAngle;
-
-        if (Date.now() < player.frozenUntil) {
+        if (Date.now() < (player.frozenUntil || 0)) {
             return;
         }
 
-        // Handle Dashing
-        if (Date.now() < player.dashingUntil) {
-            // Move player in dash direction
-            let nextX = player.x + player.dashDx * 25;
-            let nextY = player.y + player.dashDy * 25;
-
-            // Check walls
-            if (!isCollidingWithWalls(nextX, nextY, 25)) {
-                player.x = nextX;
-                player.y = nextY;
-            }
-
-            // Leave Ice Trail
-            if (player.character === 'hyperswag') {
-                iceTrails.push({
-                    id: Math.random().toString(36).substr(2, 9),
-                    x: player.x,
-                    y: player.y,
-                    owner: socket.id,
-                    endTime: Date.now() + 5000 // 5s duration
-                });
-            }
-
-            // Check enemy collision during dash
-            for (let pid in players) {
-                let p = players[pid];
-                if (pid !== socket.id && p.alive) {
-                    const dist = Math.sqrt(Math.pow(player.x - p.x, 2) + Math.pow(player.y - p.y, 2));
-                    if (dist < 60) { // Large hit radius for dash
-                        p.health -= 20;
-                        p.lastDamageTime = Date.now();
-                        player.superCharge = 100; // Recharge super as requested
-                        io.emit('collision', { x: player.x, y: player.y, type: 'player', damage: 20, victim: pid });
-                    }
-                }
-            }
+        // Only update position from client if NOT dashing
+        if (Date.now() > (player.dashingUntil || 0)) {
+            player.x = moveX;
+            player.y = moveY;
         }
+        player.angle = moveAngle;
     });
 
     socket.on('shoot', (data) => {
@@ -251,6 +252,8 @@ io.on('connection', (socket) => {
                 if (player.reloadTimer === 0) player.reloadTimer = Date.now();
             }
         }
+
+        player.lastShootTime = now;
 
         const dx = Math.cos(player.angle);
         const dy = Math.sin(player.angle);
@@ -291,19 +294,43 @@ io.on('connection', (socket) => {
                     type: 'lightning',
                     x: player.x + dx * 40,
                     y: player.y + dy * 40,
-                    vx: dx * 30, // Instant-ish
-                    vy: dy * 30,
+                    vx: dx * 90, // 3x faster (was 30)
+                    vy: dy * 90,
                     isSuper: false,
                     owner: socket.id,
                     color: '#00ffff',
-                    radius: 20
+                    radius: 60 // 3x wider (was 20)
                 });
             }
         } else if (player.character === 'hyperswag') {
             if (isSuper) {
-                player.dashingUntil = now + 500; // 0.5s dash
-                player.dashDx = dx;
-                player.dashDy = dy;
+                // Dash to Target
+                const tx = data.targetX || (player.x + dx * 300); // Fallback to current direction if no target
+                const ty = data.targetY || (player.y + dy * 300);
+
+                // Calculate distance
+                const dist = Math.sqrt(Math.pow(tx - player.x, 2) + Math.pow(ty - player.y, 2));
+
+                // Speed of dash (pixels per millisecond? No, pixels per frame is handled in update, but here we set dashDx/Dy which are per frame)
+                // Actually update loop says: let nextX = player.x + player.dashDx * 25;
+                // So dashDx/Dy should be normalized direction vector.
+                // 25 pixels/frame = 1500 pixels/sec.
+
+                const angle = Math.atan2(ty - player.y, tx - player.x);
+                player.dashDx = Math.cos(angle);
+                player.dashDy = Math.sin(angle);
+
+                // Duration = Distance / Speed
+                // Speed = 25 px/frame = 1.5 px/ms (at 60fps, 25 * 60 = 1500px/s = 1.5px/ms)
+                const speedPerMs = 1.5;
+                const duration = Math.min(3000, dist / speedPerMs); // Cap at 3s (3x longer)
+
+                player.dashingUntil = now + duration;
+                player.dashDx = Math.cos(angle);
+                player.dashDy = Math.sin(angle);
+
+                // Reset Hit List
+                player.dashHitIds = [];
             } else {
                 // Two punch attack
                 // First punch
@@ -381,6 +408,53 @@ setInterval(() => {
             }
         }
 
+        // DASHING PHYSICS (Authoritative)
+        if (player.alive && now < player.dashingUntil) {
+            const dashSpeed = 25; // Pixels per frame
+            let nextX = player.x + player.dashDx * dashSpeed;
+            let nextY = player.y + player.dashDy * dashSpeed;
+
+            // Wall Collision
+            if (!isCollidingWithWalls(nextX, nextY, 25)) {
+                player.x = nextX;
+                player.y = nextY;
+            } else {
+                // Cancel dash if stuck on wall? 
+                player.dashingUntil = 0;
+            }
+
+            // Leave Ice Trail
+            if (player.character === 'hyperswag') {
+                iceTrails.push({
+                    id: Math.random().toString(36).substr(2, 9),
+                    x: player.x,
+                    y: player.y,
+                    owner: id,
+                    endTime: now + 5000
+                });
+            }
+
+            // Dash Collision Detection
+            for (let pid in players) {
+                let p = players[pid];
+                if (pid !== id && p.alive) {
+                    const dist = Math.sqrt(Math.pow(player.x - p.x, 2) + Math.pow(player.y - p.y, 2));
+                    if (dist < 60) {
+                        if (!player.dashHitIds.includes(pid)) {
+                            p.health -= 20;
+                            p.lastDamageTime = now;
+                            player.superCharge = 100;
+                            io.emit('collision', { x: player.x, y: player.y, type: 'player', damage: 20, victim: pid });
+                            player.dashHitIds.push(pid);
+                            if (p.health <= 0) {
+                                handleDeath(pid, id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Ammo Recharge
         if (player.alive && player.ammo < player.maxAmmo) {
             if (player.reloadTimer === 0) {
@@ -435,9 +509,7 @@ setInterval(() => {
             }
 
             if (player.health <= 0) {
-                player.health = 0;
-                player.alive = false;
-                deadPlayers[id] = now;
+                handleDeath(id, player.spinningOwner);
             }
         }
 
@@ -525,14 +597,10 @@ setInterval(() => {
 
         // Check for death from tether
         if (p1.health <= 0) {
-            p1.health = 0;
-            p1.alive = false;
-            deadPlayers[t.p1] = now;
+            handleDeath(t.p1, null); // Tether kills are currently unattributed or shared
         }
         if (p2.health <= 0) {
-            p2.health = 0;
-            p2.alive = false;
-            deadPlayers[t.p2] = now;
+            handleDeath(t.p2, null);
         }
     }
 
@@ -565,9 +633,10 @@ setInterval(() => {
                     if (dist < hitRadius) {
                         let damage = 0;
                         if (proj.type === 'fireloop') damage = 20;
-                        else if (proj.type === 'lightning') damage = 15;
+                        else if (proj.type === 'lightning') damage = 20;
                         else if (proj.type === 'lightningwave') damage = 50;
                         else if (proj.type === 'watch') damage = 10;
+                        else if (proj.type === 'punch') damage = 17; // Nerfed from generic 25
                         else damage = proj.isSuper ? 100 : 25;
 
                         // Titus Passive: -4 damage
@@ -631,7 +700,7 @@ setInterval(() => {
                         if (players[proj.owner]) {
                             let chargeAmount = 0;
                             if (proj.type === 'fireloop') chargeAmount = 20;
-                            else if (proj.type === 'lightning') chargeAmount = 25;
+                            else if (proj.type === 'lightning') chargeAmount = 50;
                             else if (proj.type === 'lightningwave') chargeAmount = 15; // Wave hits many, lower charge per hit
                             else if (proj.type === 'watch') chargeAmount = 10;
                             else if (proj.type === 'punch') chargeAmount = 12.5; // 8 punches (4 full attacks) for 100%
@@ -641,9 +710,7 @@ setInterval(() => {
                         }
 
                         if (p.health <= 0) {
-                            p.health = 0;
-                            p.alive = false;
-                            deadPlayers[pid] = now;
+                            handleDeath(pid, proj.owner);
                         }
 
                         if (proj.isSuper && proj.hitIds) {
@@ -682,9 +749,54 @@ function applyPowerUp(playerId, type, now) {
     }
 }
 
+const NEAR_RADIUS = 150;
+
+function isVisible(viewer, target, now) {
+    if (viewer.id === target.id) return true;
+
+    // Check if target is in a bush
+    let inBush = false;
+    for (const bush of BUSH_RECTS) {
+        if (target.x >= bush.x && target.x <= bush.x + bush.w &&
+            target.y >= bush.y && target.y <= bush.y + bush.h) {
+            inBush = true;
+            break;
+        }
+    }
+
+    if (!inBush) return true;
+
+    // Target is in a bush. Check proximity or if they shot recently.
+    const dist = Math.sqrt(Math.pow(viewer.x - target.x, 2) + Math.pow(viewer.y - target.y, 2));
+    if (dist < NEAR_RADIUS) return true;
+
+    if (now - (target.lastShootTime || 0) < 2000) return true;
+
+    return false;
+}
+
 // Broadcast Loop (20Hz) - Reduces bandwidth and congestion
 setInterval(() => {
-    io.emit('state', { players, projectiles, powerups, iceTrails, ts: Date.now() });
+    const now = Date.now();
+    for (let viewerId in players) {
+        let viewer = players[viewerId];
+        if (!viewer.alive) continue;
+
+        let visiblePlayers = {};
+        for (let tid in players) {
+            if (isVisible(viewer, players[tid], now)) {
+                visiblePlayers[tid] = players[tid];
+            }
+        }
+
+        io.to(viewerId).emit('state', {
+            players: visiblePlayers,
+            projectiles,
+            powerups,
+            iceTrails,
+            ts: now
+        });
+    }
 }, 1000 / 20);
 
 const PORT = process.env.PORT || 3000;
