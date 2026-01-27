@@ -5,18 +5,30 @@ const socket = io();
 // UI Elements
 const uiAlive = document.getElementById('alive-count');
 const uiKills = document.getElementById('kill-count');
+const uiLives = document.getElementById('lives-count');
 const uiHealthBar = document.getElementById('health-bar');
 const uiHealthText = document.getElementById('health-text');
 const uiSuperBar = document.getElementById('super-bar');
 const uiSuperText = document.getElementById('super-text');
 const uiAmmoContainer = document.getElementById('ammo-container');
-const uiSuperZone = document.getElementById('super-btn-zone'); // Mobile Super Zone
+const deathScreen = document.getElementById('death-screen');
+const selectionScreen = document.getElementById('selection-screen');
+const lobbyScreen = document.getElementById('lobby-screen');
+const playerList = document.getElementById('player-list');
+const readyBtn = document.getElementById('ready-btn');
+const uiLayer = document.getElementById('ui-layer');
+const resultsScreen = document.getElementById('results-screen');
+const modeSelection = document.getElementById('mode-selection');
+const btnDeathmatch = document.getElementById('mode-deathmatch');
+const btnSoccer = document.getElementById('mode-soccer');
+const winnerText = document.getElementById('winner-text');
+const matchStats = document.getElementById('match-stats');
+const backToLobbyBtn = document.getElementById('back-to-lobby');
+const waitingMessage = document.getElementById('waiting-message');
+const respawnTimer = document.getElementById('respawn-timer');
+const uiSuperZone = document.getElementById('super-btn-zone');
 const minimapCanvas = document.getElementById('minimapCanvas');
 const minimapCtx = minimapCanvas ? minimapCanvas.getContext('2d') : null;
-const deathScreen = document.getElementById('death-screen');
-const respawnTimer = document.getElementById('respawn-timer');
-const selectionScreen = document.getElementById('selection-screen');
-const uiLayer = document.getElementById('ui-layer');
 const btnTitus = document.getElementById('select-titus');
 const btnAndrew = document.getElementById('select-andrew');
 
@@ -120,6 +132,11 @@ let iceTrails = []; // { x, y, owner, life }
 let projectiles = []; // Client-side projectile simulation for local responsiveness
 let camera = { x: 0, y: 0 };
 let lastShootTime = 0;
+let gameState = 'LOBBY';
+let gameMode = 'deathmatch';
+let isReady = false;
+let spectatingId = null;
+let ball = null; // Soccer ball state
 
 // Interpolation state
 let networkState = {
@@ -369,9 +386,100 @@ socket.on('init', (data) => {
     players = data.players;
 });
 
+socket.on('lobbyUpdate', (data) => {
+    players = data.players;
+    updateLobbyUI();
+
+    if (myId && players[myId]) {
+        if (players[myId].isWaiting) {
+            waitingMessage.classList.remove('hidden');
+            readyBtn.classList.add('hidden');
+        } else {
+            waitingMessage.classList.add('hidden');
+            readyBtn.classList.remove('hidden');
+        }
+    }
+});
+
+socket.on('pickMode', () => {
+    lobbyScreen.classList.add('hidden');
+    modeSelection.classList.remove('hidden');
+});
+
+socket.on('gameStart', (data) => {
+    lobbyScreen.classList.add('hidden');
+    modeSelection.classList.add('hidden');
+    resultsScreen.classList.add('hidden');
+    uiLayer.classList.remove('hidden');
+    gameState = 'PLAYING';
+    gameMode = data.mode || 'deathmatch';
+});
+
+btnDeathmatch.onclick = () => {
+    socket.emit('selectMode', { mode: 'deathmatch' });
+};
+
+btnSoccer.onclick = () => {
+    socket.emit('selectMode', { mode: 'soccer' });
+};
+
+socket.on('matchResults', (data) => {
+    gameState = 'LOBBY';
+    uiLayer.classList.add('hidden');
+    resultsScreen.classList.remove('hidden');
+    winnerText.innerText = data.winner + (data.winner === 'No one' ? '...' : " WINS!");
+
+    matchStats.innerHTML = `<div class="player-item" style="color: #aaa; border: none;">Mode: ${data.mode.toUpperCase()}</div>`;
+    data.results.forEach(res => {
+        const item = document.createElement('div');
+        item.className = 'player-item';
+        item.innerHTML = `<span>${res.nickname}</span> <span>Kills: ${res.kills} | Deaths: ${res.deaths}</span>`;
+        if (res.isWinner) {
+            item.style.color = '#00ff00';
+            item.style.borderColor = '#00ff00';
+        }
+        matchStats.appendChild(item);
+    });
+});
+
+backToLobbyBtn.onclick = () => {
+    resultsScreen.classList.add('hidden');
+    lobbyScreen.classList.remove('hidden');
+};
+
+function updateLobbyUI() {
+    playerList.innerHTML = '';
+    for (let id in players) {
+        const p = players[id];
+        const item = document.createElement('div');
+        item.className = 'player-item';
+
+        const name = document.createElement('span');
+        name.innerText = p.nickname || 'Unknown Player';
+
+        const status = document.createElement('span');
+        status.className = 'player-status ' + (p.isReady ? 'ready' : 'waiting');
+        status.innerText = p.isReady ? 'Ready' : 'Waiting...';
+
+        item.appendChild(name);
+        item.appendChild(status);
+        playerList.appendChild(item);
+    }
+}
+
+readyBtn.onclick = () => {
+    isReady = !isReady;
+    readyBtn.classList.toggle('is-ready', isReady);
+    readyBtn.innerText = isReady ? 'READY!' : 'READY UP';
+    socket.emit('readyUp', { isReady });
+};
+
 socket.on('state', (data) => {
     const serverPlayers = data.players;
     const serverProjectiles = data.projectiles;
+    ball = data.ball; // Sync ball state
+    if (data.mode) gameMode = data.mode; // Robust mode sync
+    currentGameState = data.state; // Robust state sync
 
     // Interpolation Setup
     networkState.prev = networkState.current;
@@ -393,9 +501,11 @@ socket.on('state', (data) => {
         me.frozenUntil = sMe.frozenUntil;
         me.unlimitedAmmoUntil = sMe.unlimitedAmmoUntil;
         me.kills = sMe.kills || 0;
+        me.lives = sMe.lives;
 
         // UI Updates
         if (uiKills) uiKills.innerText = me.kills;
+        if (uiLives) uiLives.innerText = me.lives;
         uiHealthBar.style.width = `${(me.health / me.maxHealth) * 100}%`;
         uiHealthText.innerText = `${Math.ceil(me.health)}/${me.maxHealth}`;
         uiSuperBar.style.width = `${me.superCharge}%`;
@@ -419,8 +529,16 @@ socket.on('state', (data) => {
         if (me.alive) {
             deathScreen.classList.add('hidden');
         } else {
-            if (deathScreen.classList.contains('hidden')) Sound.death();
-            deathScreen.classList.remove('hidden');
+            if (me.lives > 0) {
+                if (deathScreen.classList.contains('hidden')) Sound.death();
+                deathScreen.classList.remove('hidden');
+                deathScreen.querySelector('h1').innerText = 'YOU DIED';
+                deathScreen.querySelector('p').innerHTML = `Respawning in <span id="respawn-timer">${Math.ceil((5000 - (Date.now() - (networkState.lastTime - INTERP_OFFSET))) / 1000)}</span>...`;
+            } else {
+                deathScreen.classList.remove('hidden');
+                deathScreen.querySelector('h1').innerText = 'GAME OVER';
+                deathScreen.querySelector('p').innerText = 'Out of lives. Spectating...';
+            }
         }
 
         // Mobile Super Button State
@@ -466,6 +584,8 @@ socket.on('state', (data) => {
             players[id].dashingUntil = serverPlayers[id].dashingUntil;
             players[id].dashDx = serverPlayers[id].dashDx;
             players[id].dashDy = serverPlayers[id].dashDy;
+            players[id].respawnShieldUntil = serverPlayers[id].respawnShieldUntil;
+            players[id].respawnSpeedUntil = serverPlayers[id].respawnSpeedUntil;
         }
     }
     // Clean up
@@ -496,20 +616,13 @@ socket.on('hitConfirm', (data) => {
     // Actually, let's just use Sound for now.
 });
 
-socket.on('state', (data) => {
-    const serverProjectiles = data.projectiles;
-
-    // Check for "removed" projectiles to show impact
-    // (Simple hack: if a projectile exists in old state but not new, it hit something)
-    // Actually, better to send a 'collision' event from server.
-});
 
 // Game Loop
 function update() {
     if (!myId || !players[myId]) return;
 
     const me = players[myId];
-    if (!me.alive || Date.now() < (me.frozenUntil || 0) || Date.now() < (me.spinningUntil || 0)) return;
+    if (!me.alive || me.lives <= 0 || Date.now() < (me.frozenUntil || 0) || Date.now() < (me.spinningUntil || 0)) return;
 
     // CLIENT-SIDE DASH PREDICTION
     if (Date.now() < (me.dashingUntil || 0)) {
@@ -538,7 +651,11 @@ function update() {
         return; // Skip manual movement while dashing
     }
 
-    const speed = 5 * (me.speedMultiplier || 1.0); // Pixels per frame
+    let multiplier = me.speedMultiplier || 1.0;
+    if (Date.now() < (me.respawnSpeedUntil || 0)) {
+        multiplier *= 1.5;
+    }
+    const speed = 5 * multiplier; // Pixels per frame
     let dx = 0;
     let dy = 0;
 
@@ -557,33 +674,43 @@ function update() {
     // Client-side prediction with Sliding Collisions
     const collisionRadius = 30; // Radius 25 + 5 buffer
 
-    // Try X movement independently
-    let newX = me.x + dx;
-    let xCollided = false;
-    for (const wall of WALL_RECTS) {
-        const closestX = Math.max(wall.x, Math.min(newX, wall.x + wall.w));
-        const closestY = Math.max(wall.y, Math.min(me.y, wall.y + wall.h));
-        const dist = Math.sqrt(Math.pow(newX - closestX, 2) + Math.pow(me.y - closestY, 2));
-        if (dist < collisionRadius) {
-            xCollided = true;
-            break;
+    if (gameMode !== 'soccer') {
+        // Try X movement independently
+        let newX = me.x + dx;
+        let xCollided = false;
+        for (const wall of WALL_RECTS) {
+            const closestX = Math.max(wall.x, Math.min(newX, wall.x + wall.w));
+            const closestY = Math.max(wall.y, Math.min(me.y, wall.y + wall.h));
+            const dist = Math.sqrt(Math.pow(newX - closestX, 2) + Math.pow(me.y - closestY, 2));
+            if (dist < collisionRadius) {
+                xCollided = true;
+                break;
+            }
         }
-    }
-    if (!xCollided) me.x = newX;
+        if (!xCollided) me.x = newX;
 
-    // Try Y movement independently
-    let newY = me.y + dy;
-    let yCollided = false;
-    for (const wall of WALL_RECTS) {
-        const closestX = Math.max(wall.x, Math.min(me.x, wall.x + wall.w));
-        const closestY = Math.max(wall.y, Math.min(newY, wall.y + wall.h));
-        const dist = Math.sqrt(Math.pow(me.x - closestX, 2) + Math.pow(newY - closestY, 2));
-        if (dist < collisionRadius) {
-            yCollided = true;
-            break;
+        // Try Y movement independently
+        let newY = me.y + dy;
+        let yCollided = false;
+        for (const wall of WALL_RECTS) {
+            const closestX = Math.max(wall.x, Math.min(me.x, wall.x + wall.w));
+            const closestY = Math.max(wall.y, Math.min(newY, wall.y + wall.h));
+            const dist = Math.sqrt(Math.pow(me.x - closestX, 2) + Math.pow(newY - closestY, 2));
+            if (dist < collisionRadius) {
+                yCollided = true;
+                break;
+            }
         }
+        if (!yCollided) me.y = newY;
+    } else {
+        // Clean movement in Soccer
+        me.x += dx;
+        me.y += dy;
+
+        // Manual Map Bounds for Soccer
+        me.x = Math.max(0, Math.min(2000, me.x));
+        me.y = Math.max(0, Math.min(2000, me.y));
     }
-    if (!yCollided) me.y = newY;
 
     // Only calculate angle from mouse if NOT using touch joysticks
     if (!TouchControls.right.active && !TouchControls.super.active) {
@@ -672,7 +799,8 @@ setInterval(() => {
 
 // Rendering Loop
 function draw() {
-    ctx.fillStyle = '#111';
+    // Fill background with a base green color to avoid "black map"
+    ctx.fillStyle = gameMode === 'soccer' ? '#2e7d32' : '#1a1a1a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     if (!myId || !players[myId]) {
@@ -683,32 +811,68 @@ function draw() {
     const me = players[myId];
     const renderTime = Date.now() - INTERP_OFFSET;
 
-    // Camera follows player
-    camera.x = me.x - canvas.width / 2;
-    camera.y = me.y - canvas.height / 2;
+    // Camera follow logic
+    let target = me;
+    if (!me.alive && me.lives === 0) {
+        // Find someone to spectate
+        if (!spectatingId || !players[spectatingId] || !players[spectatingId].alive) {
+            const alivePlayers = Object.keys(players).filter(id => players[id].alive);
+            if (alivePlayers.length > 0) {
+                spectatingId = alivePlayers[0];
+            } else {
+                spectatingId = null;
+            }
+        }
+        if (spectatingId && players[spectatingId]) {
+            target = players[spectatingId];
+        }
+    }
 
-    // Optimized Background Drawing
-    if (assets.ground.complete) {
+    camera.x = target.x - canvas.width / 2;
+    camera.y = target.y - canvas.height / 2;
+
+    // Soccer Field Rendering
+    if (gameMode === 'soccer') {
+        renderSoccerField(ctx);
+    }
+
+    // Optimized Background Drawing (Deathmatch only or fallback)
+    if (gameMode !== 'soccer' && assets.ground.complete) {
         ctx.save();
         const ptrn = ctx.createPattern(assets.ground, 'repeat');
         ctx.fillStyle = ptrn;
         ctx.translate(-camera.x, -camera.y);
         ctx.fillRect(camera.x, camera.y, canvas.width, canvas.height);
         ctx.restore();
+    } else if (gameMode === 'soccer') {
+        // Subtle grid for grass
+        ctx.save();
+        ctx.translate(-camera.x, -camera.y);
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.05)';
+        ctx.lineWidth = 2;
+        for (let x = 0; x <= 2000; x += 100) {
+            ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 2000); ctx.stroke();
+        }
+        for (let y = 0; y <= 2000; y += 100) {
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(2000, y); ctx.stroke();
+        }
+        ctx.restore();
     }
 
     ctx.save();
     ctx.translate(-camera.x, -camera.y);
 
-    // Draw Walls (Simplified rendering)
-    ctx.strokeStyle = '#00ff44';
-    ctx.lineWidth = 2;
-    for (const wall of WALL_RECTS) {
-        ctx.strokeRect(wall.x, wall.y, wall.w, wall.h);
-        ctx.beginPath();
-        ctx.moveTo(wall.x, wall.y); ctx.lineTo(wall.x + wall.w, wall.y + wall.h);
-        ctx.moveTo(wall.x + wall.w, wall.y); ctx.lineTo(wall.x, wall.y + wall.h);
-        ctx.stroke();
+    // Draw Walls (Simplified rendering - Deathmatch only)
+    if (gameMode !== 'soccer') {
+        ctx.strokeStyle = '#00ff44';
+        ctx.lineWidth = 2;
+        for (const wall of WALL_RECTS) {
+            ctx.strokeRect(wall.x, wall.y, wall.w, wall.h);
+            ctx.beginPath();
+            ctx.moveTo(wall.x, wall.y); ctx.lineTo(wall.x + wall.w, wall.y + wall.h);
+            ctx.moveTo(wall.x + wall.w, wall.y); ctx.lineTo(wall.x, wall.y + wall.h);
+            ctx.stroke();
+        }
     }
 
     // Draw Bushes
@@ -871,34 +1035,83 @@ function draw() {
             ctx.restore();
 
         } else if (p.character === 'drandrew') {
+            // LIGHTNING SPARKS (Body aura)
+            ctx.strokeStyle = '#00ffff';
+            ctx.lineWidth = 1;
+            for (let i = 0; i < 3; i++) {
+                const ang = Date.now() / 100 + i;
+                const r = 25 + Math.random() * 10;
+                ctx.beginPath();
+                ctx.moveTo(Math.cos(ang) * r, Math.sin(ang) * r);
+                ctx.lineTo(Math.cos(ang + 0.2) * r * 1.2, Math.sin(ang + 0.2) * r * 1.2);
+                ctx.stroke();
+            }
+
+            // BUFF BODY (Shoulders)
+            ctx.fillStyle = '#1a237e'; // Dark vest
+            ctx.beginPath();
+            ctx.ellipse(0, 5, 28, 18, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Arms / Muscles (Circles to represent shoulders)
+            ctx.beginPath();
+            ctx.arc(-22, 0, 10, 0, Math.PI * 2);
+            ctx.arc(22, 0, 10, 0, Math.PI * 2);
+            ctx.fill();
+
             // FACE
             ctx.fillStyle = '#ffdbac';
             ctx.beginPath();
             ctx.arc(0, 0, 20, 0, Math.PI * 2);
             ctx.fill();
 
-            // SPLIT HAIR
-            // Blue Side (Left)
-            ctx.fillStyle = '#0088ff';
-            ctx.beginPath();
-            ctx.arc(0, 0, 21, Math.PI * 0.8, Math.PI * 1.5);
-            ctx.lineTo(0, -10);
-            ctx.fill();
-            // Brown Side (Right)
+            // PROFESSIONAL SHORT HAIR (Smart brown)
             ctx.fillStyle = '#5d2e0d';
+            // Back hair
             ctx.beginPath();
-            ctx.arc(0, 0, 21, Math.PI * 1.5, Math.PI * 2.2);
-            ctx.lineTo(0, -10);
+            ctx.arc(0, 0, 21, Math.PI * 1.1, Math.PI * 1.9);
+            ctx.fill();
+            // Sharp bangs/style
+            ctx.beginPath();
+            ctx.moveTo(-21, -5);
+            ctx.quadraticCurveTo(-15, -25, 0, -22);
+            ctx.quadraticCurveTo(15, -25, 21, -5);
+            ctx.lineTo(10, -15);
+            ctx.lineTo(-10, -15);
             ctx.fill();
 
-            // GLOWING GREEN EYES
-            ctx.shadowBlur = 10;
-            ctx.shadowColor = '#00ff00';
-            ctx.fillStyle = '#00ff00';
+            // Blue Highlight
+            ctx.fillStyle = '#00b0ff';
             ctx.beginPath();
-            ctx.arc(-7, 2, 4, 0, Math.PI * 2);
-            ctx.arc(7, 2, 4, 0, Math.PI * 2);
+            ctx.moveTo(5, -22);
+            ctx.lineTo(15, -15);
+            ctx.lineTo(10, -25);
             ctx.fill();
+
+            // STRONG JAW / SMIRK
+            ctx.strokeStyle = '#a67c52';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(-10, 8);
+            ctx.quadraticCurveTo(0, 12, 10, 8);
+            ctx.stroke();
+
+            // LIGHTNING EYES (Glow)
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = '#00ffff';
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(-8, 0, 4, 0, Math.PI * 2);
+            ctx.arc(8, 0, 4, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Lightning Trails from eyes
+            ctx.strokeStyle = '#00ffff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(-10, 0); ctx.lineTo(-20, -10);
+            ctx.moveTo(10, 0); ctx.lineTo(20, -10);
+            ctx.stroke();
             ctx.shadowBlur = 0;
 
         } else if (p.character === 'hyperswag') {
@@ -983,15 +1196,16 @@ function draw() {
             ctx.stroke();
         }
 
-        // DR ANDREW SHIELD
-        if (p.hasShield) {
-            ctx.strokeStyle = '#00ffff';
+        // DR ANDREW SHIELD OR RESPAWN SHIELD
+        if (p.hasShield || Date.now() < (p.respawnShieldUntil || 0)) {
+            const isRespawn = Date.now() < (p.respawnShieldUntil || 0);
+            ctx.strokeStyle = isRespawn ? '#ffff00' : '#00ffff';
             ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.arc(0, 0, 35, 0, Math.PI * 2);
             ctx.stroke();
             ctx.globalAlpha = 0.2;
-            ctx.fillStyle = '#00ffff';
+            ctx.fillStyle = isRespawn ? 'rgba(255, 255, 0, 0.3)' : '#00ffff';
             ctx.fill();
             ctx.globalAlpha = 1.0;
         }
@@ -1243,6 +1457,45 @@ function draw() {
     }
     ctx.globalAlpha = 1.0;
 
+    // Soccer Ball Rendering
+    if (gameMode === 'soccer' && ball) {
+        ctx.save();
+        ctx.translate(ball.x, ball.y);
+
+        // Ball Shadow
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.beginPath();
+        ctx.ellipse(0, 20, 15, 8, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Ball Body
+        ctx.fillStyle = '#fff';
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(0, 0, ball.radius || 20, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Classic soccer pentagon patterns (simple representation)
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 5; i++) {
+            const angle = (i * Math.PI * 2) / 5 + Date.now() / 1000;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(Math.cos(angle) * 20, Math.sin(angle) * 20);
+            ctx.stroke();
+
+            // Inner pentagons
+            ctx.fillStyle = '#111';
+            ctx.beginPath();
+            ctx.arc(Math.cos(angle + 0.3) * 12, Math.sin(angle + 0.3) * 12, 4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.restore();
+    }
+
     // Draw Power-ups
     powerups.forEach(pu => {
         ctx.save();
@@ -1269,7 +1522,6 @@ function draw() {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(label, 0, 0);
-
         ctx.restore();
     });
 
@@ -1278,8 +1530,6 @@ function draw() {
     ctx.restore();
     requestAnimationFrame(draw);
 }
-
-draw();
 
 function drawMinimap() {
     if (!minimapCtx) return;
@@ -1306,6 +1556,14 @@ function drawMinimap() {
         minimapCtx.arc(p.x * scaleX, p.y * scaleY, 3, 0, Math.PI * 2);
         minimapCtx.fill();
     }
+
+    // Draw Ball if soccer
+    if (gameMode === 'soccer' && ball) {
+        minimapCtx.fillStyle = '#fff';
+        minimapCtx.beginPath();
+        minimapCtx.arc(ball.x * scaleX, ball.y * scaleY, 4, 0, Math.PI * 2);
+        minimapCtx.fill();
+    }
 }
 
 socket.on('lightningTether', (data) => {
@@ -1318,7 +1576,7 @@ function joinGame(character) {
     const nickname = nicknameInput ? nicknameInput.value.trim() : "";
     myCharacter = character;
     selectionScreen.classList.add('hidden');
-    uiLayer.classList.remove('hidden');
+    lobbyScreen.classList.remove('hidden'); // Go to lobby first
     socket.emit('join', { character, nickname });
 }
 
@@ -1328,3 +1586,58 @@ const btnHyperSwag = document.getElementById('select-hyperswag');
 if (btnHyperSwag) btnHyperSwag.onclick = () => joinGame('hyperswag');
 const btnOne = document.getElementById('select-one');
 if (btnOne) btnOne.onclick = () => joinGame('one');
+
+draw();
+
+function renderSoccerField(ctx) {
+    ctx.save();
+    ctx.translate(-camera.x, -camera.y);
+
+    // Pitch base (already filled by draw() but we add a nice border here)
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 10;
+    ctx.strokeRect(5, 5, 1990, 1990);
+
+    // Markings
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = 8;
+
+    // Center line
+    ctx.beginPath();
+    ctx.moveTo(1000, 0);
+    ctx.lineTo(1000, 2000);
+    ctx.stroke();
+
+    // Center circle
+    ctx.beginPath();
+    ctx.arc(1000, 1000, 200, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Goals
+    const goalY = 800;
+    const goalH = 400;
+
+    // Left goal (Player 1)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.fillRect(0, goalY, 50, goalH);
+    ctx.strokeStyle = '#00ffff';
+    ctx.lineWidth = 5;
+    ctx.strokeRect(0, goalY, 50, goalH);
+
+    ctx.fillStyle = '#00ffff';
+    ctx.font = 'bold 30px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText("GOAL", 120, goalY + goalH / 2);
+
+    // Right goal (Player 2)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.fillRect(1950, goalY, 50, goalH);
+    ctx.strokeStyle = '#ff3300';
+    ctx.lineWidth = 5;
+    ctx.strokeRect(1950, goalY, 50, goalH);
+
+    ctx.fillStyle = '#ff3300';
+    ctx.fillText("GOAL", 1880, goalY + goalH / 2);
+
+    ctx.restore();
+}

@@ -21,6 +21,24 @@ let iceTrails = []; // { id, x, y, owner, endTime }
 const WORLD_WIDTH = 2000;
 const WORLD_HEIGHT = 2000;
 
+let gameState = 'LOBBY'; // 'LOBBY', 'PLAYING'
+let gameMode = 'deathmatch'; // 'deathmatch', 'soccer'
+
+let ball = {
+    x: 1000,
+    y: 1000,
+    vx: 0,
+    vy: 0,
+    radius: 20,
+    mass: 1.0,
+    friction: 0.98
+};
+
+const SOCCER_GOALS = {
+    left: { x: 0, y: 800, w: 50, h: 400, owner: null },
+    right: { x: 1950, y: 800, w: 50, h: 400, owner: null }
+};
+
 const WALL_RECTS = [
     // Center Barriers
     { x: 1000 - 150, y: 1000 - 20, w: 300, h: 40 },
@@ -76,6 +94,7 @@ const POWERUP_RADIUS = 20;
 let lastPowerupSpawnTime = Date.now();
 
 function isCollidingWithWalls(x, y, radius) {
+    if (gameMode === 'soccer') return false; // Clean pitch for soccer
     for (const wall of WALL_RECTS) {
         // Find closest point on rect to circle center
         const closestX = Math.max(wall.x, Math.min(x, wall.x + wall.w));
@@ -127,6 +146,12 @@ function handleDeath(victimId, killerId) {
 
     victim.health = 0;
     victim.alive = false;
+
+    // In Soccer mode, lives are ONLY lost on goals
+    if (gameMode !== 'soccer') {
+        victim.lives--;
+    }
+
     deadPlayers[victimId] = Date.now();
 
     if (killerId && players[killerId] && killerId !== victimId) {
@@ -153,6 +178,9 @@ io.on('connection', (socket) => {
         lastDamageTime: Date.now(),
         ammo: 4,
         maxAmmo: 4,
+        lastDamageTime: Date.now(),
+        ammo: 4,
+        maxAmmo: 4,
         reloadTimer: 0,
         reloadDelay: 1800,
         hasShield: false,
@@ -163,8 +191,13 @@ io.on('connection', (socket) => {
         speedUntil: 0,
         kills: 0,
         lastShootTime: 0,
+        lives: 3,
+        isReady: false,
+        respawnShieldUntil: 0,
+        respawnSpeedUntil: 0
     };
     socket.emit('init', { id: socket.id, players });
+    io.emit('lobbyUpdate', { players });
 
     socket.on('join', (data) => {
         const character = data.character || 'titus';
@@ -200,7 +233,12 @@ io.on('connection', (socket) => {
             dashDy: 0,
             dashHitIds: [], // Track unique hits per dash
             kills: 0,
-            lastShootTime: 0
+            lastShootTime: 0,
+            lives: 3,
+            isReady: false,
+            isWaiting: gameState === 'PLAYING', // New players must wait if game is in progress
+            respawnShieldUntil: 0,
+            respawnSpeedUntil: 0
         };
 
         if (character === 'hyperswag') {
@@ -223,11 +261,72 @@ io.on('connection', (socket) => {
         }
 
         socket.emit('init', { id: socket.id, players });
+        io.emit('lobbyUpdate', { players });
     });
+
+    socket.on('readyUp', (data) => {
+        if (players[socket.id]) {
+            players[socket.id].isReady = data.isReady;
+            io.emit('lobbyUpdate', { players });
+
+            // Check if all players are ready
+            const allReady = Object.values(players).every(p => p.isReady);
+            if (allReady && Object.keys(players).length > 0) {
+                io.emit('pickMode');
+            }
+        }
+    });
+
+    socket.on('selectMode', (data) => {
+        if (gameState === 'LOBBY') {
+            gameMode = data.mode || 'deathmatch';
+            startMatch();
+        }
+    });
+
+    function startMatch() {
+        gameState = 'PLAYING';
+
+        // Reset ball if soccer
+        if (gameMode === 'soccer') {
+            ball.x = 1000;
+            ball.y = 1000;
+            ball.vx = 0;
+            ball.vy = 0;
+
+            // Assign goals for 1v1 soccer (simple assignment for now)
+            const ids = Object.keys(players);
+            if (ids.length >= 1) SOCCER_GOALS.left.owner = ids[0];
+            if (ids.length >= 2) SOCCER_GOALS.right.owner = ids[1];
+
+            // Set 2 lives for soccer
+            for (let id in players) {
+                players[id].lives = 2;
+                // Spawn at goals
+                if (id === SOCCER_GOALS.left.owner) {
+                    players[id].x = 100;
+                    players[id].y = 1000;
+                } else if (id === SOCCER_GOALS.right.owner) {
+                    players[id].x = 1900;
+                    players[id].y = 1000;
+                }
+            }
+        } else {
+            // Reset for deathmatch
+            for (let id in players) {
+                players[id].lives = 3;
+                const { x, y } = getSafeSpawn();
+                players[id].x = x;
+                players[id].y = y;
+            }
+        }
+
+        io.emit('gameStart', { mode: gameMode });
+    }
 
     socket.on('update', (data) => {
         const player = players[socket.id];
-        if (!player || !player.alive) return;
+        if (!player || !player.alive || player.isWaiting) return; // Prevent movement if dead or waiting
 
         // If spinning, randomize angle and reduce movement
         let moveX = data.x;
@@ -423,8 +522,44 @@ io.on('connection', (socket) => {
         console.log('User disconnected:', socket.id);
         delete players[socket.id];
         delete deadPlayers[socket.id];
+        checkWinCondition(); // Check if someone won because of disconnect
     });
 });
+
+function checkWinCondition() {
+    if (gameState !== 'PLAYING') return;
+
+    const alivePlayers = Object.values(players).filter(p => !p.isWaiting && (p.lives > 0 || p.alive));
+
+    // If only 1 player remains with lives
+    if (alivePlayers.length <= 1) {
+        const winner = alivePlayers.length === 1 ? alivePlayers[0] : null;
+        const maxLives = gameMode === 'soccer' ? 2 : 3;
+        const results = Object.values(players).map(p => ({
+            nickname: p.nickname,
+            kills: p.kills,
+            deaths: maxLives - (p.lives || 0),
+            isWinner: winner && p.id === winner.id
+        }));
+
+        io.emit('matchResults', {
+            winner: winner ? winner.nickname : 'No one',
+            results,
+            mode: gameMode
+        });
+
+        // Return to Lobby state
+        gameState = 'LOBBY';
+        for (let id in players) {
+            players[id].isReady = false;
+            players[id].isWaiting = false;
+            players[id].alive = true;
+            players[id].health = players[id].maxHealth;
+            // lives will be reset in startMatch
+        }
+        io.emit('lobbyUpdate', { players });
+    }
+}
 
 // Authoritative Physics Loop (60Hz)
 setInterval(() => {
@@ -442,15 +577,15 @@ setInterval(() => {
 
         // Respawn check
         if (!player.alive && deadPlayers[id]) {
-            if (now - deadPlayers[id] > 5000) {
-                const { x, y } = getSafeSpawn();
+            if (player.lives > 0 && now - deadPlayers[id] > 5000) {
                 player.alive = true;
                 player.health = player.maxHealth;
                 player.superCharge = 0;
                 player.ammo = player.maxAmmo;
                 player.lastDamageTime = now;
-                player.x = x;
-                player.y = y;
+                player.respawnShieldUntil = now + 3000;
+                player.respawnSpeedUntil = now + 3000;
+                // Position stays where they died as per user request
                 delete deadPlayers[id];
             }
         }
@@ -488,14 +623,20 @@ setInterval(() => {
                     const dist = Math.sqrt(Math.pow(player.x - p.x, 2) + Math.pow(player.y - p.y, 2));
                     if (dist < 60) {
                         if (!player.dashHitIds.includes(pid)) {
-                            p.health -= 20;
-                            p.lastDamageTime = now;
-                            player.superCharge = 100;
-                            io.emit('collision', { x: player.x, y: player.y, type: 'player', damage: 20, victim: pid });
-                            player.dashHitIds.push(pid);
-                            if (p.health <= 0) {
-                                handleDeath(pid, id);
+                            let damage = 20;
+                            if (now < (p.respawnShieldUntil || 0)) {
+                                damage = 0;
                             }
+                            if (damage > 0) {
+                                p.health -= damage;
+                                p.lastDamageTime = now;
+                                player.superCharge = 100;
+                                io.emit('collision', { x: player.x, y: player.y, type: 'player', damage: 20, victim: pid });
+                                if (p.health <= 0) {
+                                    handleDeath(pid, id);
+                                }
+                            }
+                            player.dashHitIds.push(pid);
                         }
                     }
                 }
@@ -528,7 +669,7 @@ setInterval(() => {
         }
 
         // Spinning DOT (Titus Super)
-        if (player.alive && now < player.spinningUntil) {
+        if (player.alive && now < player.spinningUntil && now > (player.respawnShieldUntil || 0)) {
             const damage = 10 * (1 / 60); // 10 damage per second
             player.health -= damage;
 
@@ -564,6 +705,12 @@ setInterval(() => {
         if (player.speedUntil > 0 && now > player.speedUntil) {
             player.speedMultiplier = 1.0;
             player.speedUntil = 0;
+        }
+
+        // Apply Respawn Speed Boost
+        let currentSpeedMultiplier = player.speedMultiplier || 1.0;
+        if (now < (player.respawnSpeedUntil || 0)) {
+            currentSpeedMultiplier *= 1.5;
         }
 
         // HyperSwag Ice Trail Interaction
@@ -603,8 +750,10 @@ setInterval(() => {
 
                     // Continuous damage (5 DPS)
                     const damage = 5 * (1 / 60);
-                    player.health -= damage;
-                    player.lastDamageTime = now;
+                    if (now > (player.respawnShieldUntil || 0)) {
+                        player.health -= damage;
+                        player.lastDamageTime = now;
+                    }
 
                     if (player.health <= 0) {
                         handleDeath(id, proj.owner);
@@ -646,10 +795,18 @@ setInterval(() => {
 
         // Persistent DOT (3 damage per 0.25s = 12 damage/sec)
         const damage = 12 * (1 / 60);
-        p1.health -= damage;
-        p2.health -= damage;
-        p1.lastDamageTime = now;
-        p2.lastDamageTime = now;
+
+        // P1 Damage
+        if (now > (p1.respawnShieldUntil || 0)) {
+            p1.health -= damage;
+            p1.lastDamageTime = now;
+        }
+
+        // P2 Damage
+        if (now > (p2.respawnShieldUntil || 0)) {
+            p2.health -= damage;
+            p2.lastDamageTime = now;
+        }
 
         // Charge Andrew's Super from Chain damage
         for (let pid in players) {
@@ -697,6 +854,27 @@ setInterval(() => {
             io.emit('collision', { x: proj.x, y: proj.y, type: 'wall' });
         }
 
+        // Ball Interaction (Prioritized in Soccer Mode)
+        if (gameMode === 'soccer' && !hitBoundary) {
+            const dist = Math.sqrt(Math.pow(proj.x - ball.x, 2) + Math.pow(proj.y - ball.y, 2));
+            const collisionRadius = ball.radius + (proj.radius || 20) + 15;
+
+            if (dist < collisionRadius) {
+                const impulseAngle = (proj.vx !== 0 || proj.vy !== 0)
+                    ? Math.atan2(proj.vy, proj.vx)
+                    : (proj.angle || 0);
+
+                const power = (proj.damage || 10) / 2;
+                ball.vx += Math.cos(impulseAngle) * power;
+                ball.vy += Math.sin(impulseAngle) * power;
+
+                if (proj.type !== 'hammer' && proj.type !== 'storm') {
+                    projectiles.splice(i, 1);
+                    continue;
+                }
+            }
+        }
+
         // Player Collision
         let hitPlayer = false;
         if (!hitBoundary) {
@@ -733,6 +911,11 @@ setInterval(() => {
                         // Titus Passive: -4 damage
                         if (p.character === 'titus') {
                             damage = Math.max(0, damage - 4);
+                        }
+
+                        // Respawn Shield
+                        if (now < (p.respawnShieldUntil || 0)) {
+                            damage = 0;
                         }
 
                         // Dr. Andrew Passive: Shield
@@ -818,11 +1001,102 @@ setInterval(() => {
         }
 
         const hit = hitBoundary || hitPlayer || Math.abs(proj.x) > 6000 || Math.abs(proj.y) > 4000 || (proj.duration && now > (proj.startTime + proj.duration));
+
         if (hit) {
             projectiles.splice(i, 1);
         }
     }
+
+    // Periodically check win condition
+    checkWinCondition();
+
+    // Soccer Ball Physics
+    if (gameState === 'PLAYING' && gameMode === 'soccer') {
+        updateBallPhysics(now);
+    }
 }, 1000 / 60);
+
+function updateBallPhysics(now) {
+    ball.x += ball.vx;
+    ball.y += ball.vy;
+
+    // Friction
+    ball.vx *= ball.friction;
+    ball.vy *= ball.friction;
+
+    if (Math.abs(ball.vx) < 0.1) ball.vx = 0;
+    if (Math.abs(ball.vy) < 0.1) ball.vy = 0;
+
+    // Wall Collisions (Modified for Goals)
+    let leftBound = 0;
+    let rightBound = 2000;
+
+    // If ball is within goal Y range, allow it to pass X boundaries
+    const inGoalY = ball.y > 800 && ball.y < 1200;
+
+    if (ball.x - ball.radius < 0) {
+        if (!inGoalY) {
+            ball.x = ball.radius;
+            ball.vx *= -0.5;
+        }
+    }
+    if (ball.x + ball.radius > 2000) {
+        if (!inGoalY) {
+            ball.x = 2000 - ball.radius;
+            ball.vx *= -0.5;
+        }
+    }
+
+    // Floor/Ceiling
+    if (ball.y - ball.radius < 0) {
+        ball.y = ball.radius;
+        ball.vy *= -0.5;
+    }
+    if (ball.y + ball.radius > 2000) {
+        ball.y = 2000 - ball.radius;
+        ball.vy *= -0.5;
+    }
+
+    // Reset if it goes too far out of bounds (just in case)
+    if (ball.x < -100 || ball.x > 2100) {
+        ball.x = 1000;
+        ball.y = 1000;
+        ball.vx = 0;
+        ball.vy = 0;
+    }
+
+    // Scoring
+    checkSoccerGoal(now);
+}
+
+function checkSoccerGoal(now) {
+    // Check left goal
+    if (ball.x < 50 && ball.y > 800 && ball.y < 1200) {
+        scorePoint('left');
+    }
+    // Check right goal
+    if (ball.x > 1950 && ball.y > 800 && ball.y < 1200) {
+        scorePoint('right');
+    }
+}
+
+function scorePoint(side) {
+    const ownerId = SOCCER_GOALS[side].owner;
+    if (ownerId && players[ownerId]) {
+        players[ownerId].lives--;
+        io.emit('killNotification', { killer: 'GOAL', victim: ownerId });
+
+        // Reset ball
+        ball.x = 1000;
+        ball.y = 1000;
+        ball.vx = 0;
+        ball.vy = 0;
+
+        if (players[ownerId].lives <= 0) {
+            players[ownerId].alive = false;
+        }
+    }
+}
 
 function applyPowerUp(playerId, type, now) {
     const player = players[playerId];
@@ -874,7 +1148,7 @@ setInterval(() => {
     const now = Date.now();
     for (let viewerId in players) {
         let viewer = players[viewerId];
-        if (!viewer.alive) continue;
+        // Dead players still need state updates to see their health at 0 and spectator updates
 
         let visiblePlayers = {};
         for (let tid in players) {
@@ -888,6 +1162,9 @@ setInterval(() => {
             projectiles,
             powerups,
             iceTrails,
+            ball: (gameMode === 'soccer') ? ball : null,
+            mode: gameMode,
+            state: gameState,
             ts: now
         });
     }

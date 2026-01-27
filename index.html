@@ -55,9 +55,43 @@
         </div>
     </div>
 
+    <div id="lobby-screen" class="hidden">
+        <div class="selection-container">
+            <h1>Lobby</h1>
+            <div id="waiting-message" class="waiting-message hidden">Game in progress... Please wait.</div>
+            <div id="player-list" class="player-list">
+                <!-- Players will be listed here -->
+            </div>
+            <button id="ready-btn" class="ready-btn">READY UP</button>
+        </div>
+    </div>
+
+    <div id="mode-selection" class="hidden">
+        <div class="selection-container">
+            <h1>Select Game Mode</h1>
+            <div class="mode-buttons">
+                <button id="mode-deathmatch" class="ready-btn">DEATHMATCH</button>
+                <button id="mode-soccer" class="ready-btn"
+                    style="border-color: #00ff00; color: #00ff00;">SOCCER</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="results-screen" class="hidden">
+        <div class="selection-container">
+            <h1 id="winner-text">WINNER!</h1>
+            <div id="match-stats" class="player-list">
+                <!-- Stats will be listed here -->
+            </div>
+            <button id="back-to-lobby" class="ready-btn">BACK TO LOBBY</button>
+        </div>
+    </div>
+
     <div id="ui-layer" class="hidden">
         <div id="hud-top">
-            <div class="score-board">Alive: <span id="alive-count">0</span> | Kills: <span id="kill-count">0</span>
+            <div class="score-board">
+                Lives: <span id="lives-count">3</span> | Alive: <span id="alive-count">0</span> | Kills: <span
+                    id="kill-count">0</span>
             </div>
         </div>
 
