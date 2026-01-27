@@ -793,6 +793,9 @@ function draw() {
         } else if (p.character === 'hyperswag') {
             primaryColor = isMe ? '#00ffff' : '#88ffff';
             secondaryColor = isMe ? '#ffffff' : '#ccffff';
+        } else if (p.character === 'one') {
+            primaryColor = isMe ? '#deb887' : '#8b4513';
+            secondaryColor = isMe ? '#8b4513' : '#5d2e0d';
         }
 
         // Optimized Body Drawing (reduced shadowBlur)
@@ -807,10 +810,158 @@ function draw() {
         ctx.arc(0, 0, 25, 0, Math.PI * 2);
         ctx.stroke();
 
-        ctx.fillStyle = secondaryColor;
-        ctx.beginPath();
-        ctx.moveTo(10, 0); ctx.lineTo(-10, -8); ctx.lineTo(-10, 8); ctx.closePath();
-        ctx.fill();
+        if (p.character === 'one') {
+            // Wooden body detail
+            ctx.fillStyle = secondaryColor;
+            ctx.beginPath();
+            ctx.arc(0, 0, 20, 0, Math.PI * 2);
+            ctx.fill();
+            // Mask eyes
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.arc(-8, -5, 4, 0, Math.PI * 2);
+            ctx.arc(8, -5, 4, 0, Math.PI * 2);
+            ctx.fill();
+            // Leaf detail
+            ctx.fillStyle = '#32cd32';
+            ctx.beginPath();
+            ctx.ellipse(0, -28, 5, 8, 0, 0, Math.PI * 2);
+            ctx.fill();
+        } else if (p.character === 'titus') {
+            // BLUE HOOD
+            ctx.fillStyle = '#0044aa';
+            ctx.beginPath();
+            ctx.arc(0, 5, 22, Math.PI, 0); // Hood top
+            ctx.lineTo(22, 25);
+            ctx.lineTo(-22, 25);
+            ctx.closePath();
+            ctx.fill();
+
+            // FACE
+            ctx.fillStyle = '#ffdbac';
+            ctx.beginPath();
+            ctx.arc(0, 0, 15, 0, Math.PI * 2);
+            ctx.fill();
+
+            // DETERMINED EYES
+            ctx.fillStyle = '#333';
+            ctx.beginPath();
+            ctx.moveTo(-8, -4); ctx.lineTo(-2, -2); // Left brow style
+            ctx.moveTo(8, -4); ctx.lineTo(2, -2);   // Right brow style
+            ctx.stroke();
+            ctx.fillRect(-6, 0, 3, 2);
+            ctx.fillRect(3, 0, 3, 2);
+
+            // FLAMING WATCH (Small detail in front)
+            ctx.save();
+            ctx.translate(15, 10);
+            ctx.fillStyle = '#ffff00';
+            ctx.beginPath();
+            ctx.arc(0, 0, 6, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = '#ff6600';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            for (let i = 0; i < 8; i++) {
+                let a = i * Math.PI / 4 + Date.now() / 200;
+                ctx.moveTo(Math.cos(a) * 6, Math.sin(a) * 6);
+                ctx.lineTo(Math.cos(a) * 9, Math.sin(a) * 9);
+            }
+            ctx.stroke();
+            ctx.restore();
+
+        } else if (p.character === 'drandrew') {
+            // FACE
+            ctx.fillStyle = '#ffdbac';
+            ctx.beginPath();
+            ctx.arc(0, 0, 20, 0, Math.PI * 2);
+            ctx.fill();
+
+            // SPLIT HAIR
+            // Blue Side (Left)
+            ctx.fillStyle = '#0088ff';
+            ctx.beginPath();
+            ctx.arc(0, 0, 21, Math.PI * 0.8, Math.PI * 1.5);
+            ctx.lineTo(0, -10);
+            ctx.fill();
+            // Brown Side (Right)
+            ctx.fillStyle = '#5d2e0d';
+            ctx.beginPath();
+            ctx.arc(0, 0, 21, Math.PI * 1.5, Math.PI * 2.2);
+            ctx.lineTo(0, -10);
+            ctx.fill();
+
+            // GLOWING GREEN EYES
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = '#00ff00';
+            ctx.fillStyle = '#00ff00';
+            ctx.beginPath();
+            ctx.arc(-7, 2, 4, 0, Math.PI * 2);
+            ctx.arc(7, 2, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+        } else if (p.character === 'hyperswag') {
+            // SHARK BODY / HEAD (Blue circle with point)
+            ctx.fillStyle = '#0088ff';
+            ctx.beginPath();
+            ctx.arc(0, 0, 23, 0, Math.PI * 2);
+            ctx.fill();
+
+            // SHARK FIN (top view representation)
+            ctx.beginPath();
+            ctx.moveTo(0, -20);
+            ctx.lineTo(-5, 0);
+            ctx.lineTo(5, 0);
+            ctx.fill();
+
+            // WHITE BELLY AREA
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(0, 10, 15, 0, Math.PI * 2);
+            ctx.fill();
+
+            // EYES (Cute large eyes)
+            ctx.fillStyle = '#333';
+            ctx.beginPath();
+            ctx.arc(-8, -2, 5, 0, Math.PI * 2);
+            ctx.arc(8, -2, 5, 0, Math.PI * 2);
+            ctx.fill();
+            // Eye shine
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(-9, -3, 1.5, 0, Math.PI * 2);
+            ctx.arc(7, -3, 1.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // PINK BLUSH CHEEKS
+            ctx.fillStyle = 'rgba(255, 105, 180, 0.6)';
+            ctx.beginPath();
+            ctx.arc(-14, 8, 5, 0, Math.PI * 2);
+            ctx.arc(14, 8, 5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // COLLAR and BELL
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.arc(0, 15, 10, 0.2, Math.PI - 0.2);
+            ctx.stroke();
+
+            ctx.fillStyle = '#ffd700'; // GOLD
+            ctx.beginPath();
+            ctx.arc(0, 24, 6, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = '#aa8800';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+        } else {
+            ctx.fillStyle = secondaryColor;
+            ctx.beginPath();
+            ctx.moveTo(10, 0); ctx.lineTo(-10, -8); ctx.lineTo(-10, 8); ctx.closePath();
+            ctx.fill();
+        }
 
         ctx.strokeStyle = '#fff';
         ctx.lineWidth = 4;
@@ -864,14 +1015,15 @@ function draw() {
         if (p.character === 'titus') ctx.fillStyle = '#ffbb00';
         if (p.character === 'drandrew') ctx.fillStyle = '#00ffff';
         if (p.character === 'hyperswag') ctx.fillStyle = '#ffffff';
+        if (p.character === 'one') ctx.fillStyle = '#deb887';
         ctx.fillRect(drawX - barWidth / 2, barY, barWidth * (p.health / (p.maxHealth || 100)), barHeight);
 
         // Character Name & Health Text Above Bar
         ctx.fillStyle = '#fff';
         ctx.font = 'bold 12px Arial';
         ctx.textAlign = 'center';
-        const name = p.character === 'titus' ? 'Titus' : (p.character === 'drandrew' ? 'Dr. Andrew' : (p.character === 'hyperswag' ? 'HyperSwag' : 'Player'));
-        ctx.fillText(`${name} ${Math.ceil(p.health)}/${p.maxHealth || 100}`, drawX, barY - 5);
+        const displayName = p.nickname || (p.character === 'titus' ? 'Titus' : (p.character === 'drandrew' ? 'Dr. Andrew' : (p.character === 'hyperswag' ? 'HyperSwag' : (p.character === 'one' ? 'One' : 'Player'))));
+        ctx.fillText(`${displayName} ${Math.ceil(p.health)}/${p.maxHealth || 100}`, drawX, barY - 5);
 
         // Ammo Bar (Local Player Only)
         if (id === myId) {
@@ -974,6 +1126,8 @@ function draw() {
             }
             ctx.stroke();
         } else if (proj.type === 'punch') {
+            ctx.save();
+            ctx.rotate(proj.angle || 0);
             ctx.strokeStyle = '#00ffff';
             ctx.lineWidth = 3;
             ctx.shadowBlur = 10;
@@ -984,6 +1138,72 @@ function draw() {
             ctx.beginPath();
             ctx.arc(0, 0, 20, -Math.PI / 4, Math.PI / 4);
             ctx.stroke();
+            ctx.restore();
+        } else if (proj.type === 'hammer') {
+            // BAT SWING ARC
+            const age = Date.now() - proj.startTime;
+            const duration = 300;
+            const progress = Math.min(1, age / duration);
+
+            // Swing from -PI/2 to PI/2 relative to aim
+            const swingRange = Math.PI * 0.8; // 144 degrees
+            const startAngle = -swingRange / 2;
+            const currentAngle = startAngle + swingRange * progress;
+
+            ctx.save();
+            ctx.rotate(proj.angle || 0);
+
+            ctx.strokeStyle = 'rgba(210, 180, 140, 0.8)';
+            ctx.lineWidth = 15;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.arc(0, 0, 100, startAngle, currentAngle);
+            ctx.stroke();
+
+            // Hammer Head at leading edge
+            ctx.save();
+            ctx.rotate(currentAngle);
+            ctx.fillStyle = '#8b4513';
+            ctx.fillRect(80, -20, 40, 40);
+            ctx.restore();
+
+            // Fade-out shockwave
+            ctx.strokeStyle = `rgba(139, 69, 19, ${0.4 * (1 - progress)})`;
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.arc(0, 0, 130 * progress, -swingRange / 2, swingRange / 2);
+            ctx.stroke();
+
+            ctx.restore();
+
+        } else if (proj.type === 'storm') {
+            const age = Date.now() - proj.startTime;
+            ctx.rotate(age / 500); // Slower visual rotation
+
+            ctx.fillStyle = 'rgba(160, 82, 45, 0.3)';
+            ctx.beginPath();
+            ctx.arc(0, 0, 150, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Rising dust swirl
+            ctx.strokeStyle = 'rgba(139, 69, 19, 0.4)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            for (let i = 0; i < 5; i++) {
+                const r = 30 + i * 25;
+                ctx.arc(0, 0, r, age / 400 + i, age / 400 + i + Math.PI / 2);
+            }
+            ctx.stroke();
+
+            // Heavy debris
+            ctx.fillStyle = '#5d2e0d';
+            for (let i = 0; i < 15; i++) {
+                const angle = (i * 1.3 + age / 300);
+                const r = (30 + (i * 7) % 120);
+                ctx.beginPath();
+                ctx.arc(Math.cos(angle) * r, Math.sin(angle) * r, 4, 0, Math.PI * 2);
+                ctx.fill();
+            }
         } else {
             const color = proj.isSuper ? '#ff00ff' : (proj.owner === myId ? '#00ffff' : '#ff0000');
             ctx.strokeStyle = color;
@@ -1094,13 +1314,17 @@ socket.on('lightningTether', (data) => {
 
 // Selection Screen Handlers
 function joinGame(character) {
+    const nicknameInput = document.getElementById('nickname-input');
+    const nickname = nicknameInput ? nicknameInput.value.trim() : "";
     myCharacter = character;
     selectionScreen.classList.add('hidden');
     uiLayer.classList.remove('hidden');
-    socket.emit('join', { character });
+    socket.emit('join', { character, nickname });
 }
 
 if (btnTitus) btnTitus.onclick = () => joinGame('titus');
 if (btnAndrew) btnAndrew.onclick = () => joinGame('drandrew');
 const btnHyperSwag = document.getElementById('select-hyperswag');
 if (btnHyperSwag) btnHyperSwag.onclick = () => joinGame('hyperswag');
+const btnOne = document.getElementById('select-one');
+if (btnOne) btnOne.onclick = () => joinGame('one');

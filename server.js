@@ -168,10 +168,12 @@ io.on('connection', (socket) => {
 
     socket.on('join', (data) => {
         const character = data.character || 'titus';
+        const nickname = data.nickname || "";
         const { x, y } = getSafeSpawn();
 
         players[socket.id] = {
             id: socket.id,
+            nickname: nickname,
             x: x,
             y: y,
             character: character,
@@ -208,6 +210,16 @@ io.on('connection', (socket) => {
             players[socket.id].ammo = 3;
             players[socket.id].maxAmmo = 3;
             players[socket.id].reloadDelay = 1500;
+        }
+
+        if (character === 'one') {
+            players[socket.id].health = 130;
+            players[socket.id].maxHealth = 130;
+            players[socket.id].color = '#8b4513';
+            players[socket.id].ammo = 1;
+            players[socket.id].maxAmmo = 1;
+            players[socket.id].reloadDelay = 1500;
+            players[socket.id].speedMultiplier = 1.33;
         }
 
         socket.emit('init', { id: socket.id, players });
@@ -368,6 +380,41 @@ io.on('connection', (socket) => {
                         });
                     }
                 }, 150);
+            }
+        } else if (player.character === 'one') {
+            if (isSuper) {
+                projectiles.push({
+                    id: Math.random().toString(36).substr(2, 9),
+                    type: 'storm',
+                    x: player.x + dx * 40,
+                    y: player.y + dy * 40,
+                    vx: dx * 1.5, // Slowed down from 3
+                    vy: dy * 1.5,
+                    isSuper: true,
+                    owner: socket.id,
+                    color: '#a0522d',
+                    radius: 150,
+                    duration: 5000,
+                    startTime: Date.now(),
+                    hitIds: []
+                });
+            } else {
+                projectiles.push({
+                    id: Math.random().toString(36).substr(2, 9),
+                    type: 'hammer',
+                    x: player.x, // Center on player for arc check
+                    y: player.y,
+                    vx: 0,
+                    vy: 0,
+                    angle: player.angle, // Store swing direction
+                    isSuper: false,
+                    owner: socket.id,
+                    color: '#8b4513',
+                    radius: 130, // Slightly larger for better "swing" distance
+                    duration: 300,
+                    startTime: Date.now(),
+                    hitIds: [] // Track hits to prevent multi-hit
+                });
             }
         }
     });
@@ -545,6 +592,27 @@ setInterval(() => {
             }
         }
 
+        // Abduction by Storm
+        for (let proj of projectiles) {
+            if (proj.type === 'storm' && proj.owner !== id) {
+                const dist = Math.sqrt(Math.pow(player.x - proj.x, 2) + Math.pow(player.y - proj.y, 2));
+                if (dist < proj.radius) {
+                    // Abduct: Move player with storm
+                    player.x += proj.vx;
+                    player.y += proj.vy;
+
+                    // Continuous damage (5 DPS)
+                    const damage = 5 * (1 / 60);
+                    player.health -= damage;
+                    player.lastDamageTime = now;
+
+                    if (player.health <= 0) {
+                        handleDeath(id, proj.owner);
+                    }
+                }
+            }
+        }
+
         // Powerup Collision
         if (player.alive && now > player.frozenUntil) {
             for (let i = powerups.length - 1; i >= 0; i--) {
@@ -607,8 +675,19 @@ setInterval(() => {
     // Projectile Movement & Collision
     for (let i = projectiles.length - 1; i >= 0; i--) {
         let proj = projectiles[i];
-        proj.x += proj.vx;
-        proj.y += proj.vy;
+
+        // Attack Attachment: Hammers and Punches follow their owner
+        if (proj.type === 'hammer' || proj.type === 'punch') {
+            const owner = players[proj.owner];
+            if (owner && owner.alive) {
+                proj.x = owner.x;
+                proj.y = owner.y;
+                proj.angle = owner.angle;
+            }
+        } else {
+            proj.x += proj.vx;
+            proj.y += proj.vy;
+        }
 
         let hitBoundary = false;
 
@@ -625,18 +704,30 @@ setInterval(() => {
                 let p = players[pid];
                 if (p.alive && pid !== proj.owner) {
                     // Piercing projectiles (isSuper) only hit once per target
-                    if (proj.isSuper && proj.hitIds && proj.hitIds.includes(pid)) continue;
+                    if (proj.hitIds && proj.hitIds.includes(pid)) continue;
 
                     const dist = Math.sqrt(Math.pow(proj.x - p.x, 2) + Math.pow(proj.y - p.y, 2));
                     const hitRadius = proj.radius || (proj.isSuper ? 40 : 35);
 
                     if (dist < hitRadius) {
+                        // Special Check for Hammer (Arc Attack)
+                        if (proj.type === 'hammer') {
+                            const angleToPlayer = Math.atan2(p.y - proj.y, p.x - proj.x);
+                            let angleDiff = angleToPlayer - proj.angle;
+                            while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+                            while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+
+                            // 150 degree arc (approx half-way around)
+                            if (Math.abs(angleDiff) > Math.PI * 0.4) continue;
+                        }
                         let damage = 0;
                         if (proj.type === 'fireloop') damage = 20;
                         else if (proj.type === 'lightning') damage = 20;
                         else if (proj.type === 'lightningwave') damage = 50;
                         else if (proj.type === 'watch') damage = 10;
                         else if (proj.type === 'punch') damage = 17; // Nerfed from generic 25
+                        else if (proj.type === 'hammer') damage = 30;
+                        else if (proj.type === 'storm') damage = 30; // Burst damage per hit
                         else damage = proj.isSuper ? 100 : 25;
 
                         // Titus Passive: -4 damage
@@ -704,6 +795,8 @@ setInterval(() => {
                             else if (proj.type === 'lightningwave') chargeAmount = 15; // Wave hits many, lower charge per hit
                             else if (proj.type === 'watch') chargeAmount = 10;
                             else if (proj.type === 'punch') chargeAmount = 12.5; // 8 punches (4 full attacks) for 100%
+                            else if (proj.type === 'hammer') chargeAmount = 50; // 2 hits for 100%
+                            else if (proj.type === 'storm') chargeAmount = 2; // Low charge from storm ticks
                             else chargeAmount = 20;
 
                             players[proj.owner].superCharge = Math.min(100, (players[proj.owner].superCharge || 0) + chargeAmount);
@@ -713,11 +806,12 @@ setInterval(() => {
                             handleDeath(pid, proj.owner);
                         }
 
-                        if (proj.isSuper && proj.hitIds) {
+                        // Burst damage projectiles only hit once
+                        if (proj.hitIds) {
                             proj.hitIds.push(pid);
                         }
 
-                        if (!proj.isSuper) hitPlayer = true;
+                        if (!proj.isSuper && proj.type !== 'hammer') hitPlayer = true;
                     }
                 }
             }
