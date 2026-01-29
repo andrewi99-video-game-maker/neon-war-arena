@@ -22,7 +22,10 @@ const WORLD_WIDTH = 2000;
 const WORLD_HEIGHT = 2000;
 
 let gameState = 'LOBBY'; // 'LOBBY', 'PLAYING'
-let gameMode = 'deathmatch'; // 'deathmatch', 'soccer'
+let gameMode = 'deathmatch'; // 'deathmatch', 'soccer', 'hideandseek'
+let seekerId = null;
+let hnsTimeLimit = 120000; // 2 minutes
+let matchStartTime = 0;
 
 let ball = {
     x: 1000,
@@ -193,6 +196,7 @@ io.on('connection', (socket) => {
         lastShootTime: 0,
         lives: 3,
         isReady: false,
+        isWaiting: gameState === 'PLAYING',
         respawnShieldUntil: 0,
         respawnSpeedUntil: 0
     };
@@ -311,6 +315,18 @@ io.on('connection', (socket) => {
                     players[id].y = 1000;
                 }
             }
+        } else if (gameMode === 'hideandseek') {
+            const ids = Object.keys(players);
+            seekerId = ids[Math.floor(Math.random() * ids.length)];
+            matchStartTime = Date.now();
+
+            for (let id in players) {
+                players[id].lives = (id === seekerId) ? 999 : 1;
+                const { x, y } = getSafeSpawn();
+                players[id].x = x;
+                players[id].y = y;
+                players[id].isHider = (id !== seekerId);
+            }
         } else {
             // Reset for deathmatch
             for (let id in players) {
@@ -321,7 +337,12 @@ io.on('connection', (socket) => {
             }
         }
 
-        io.emit('gameStart', { mode: gameMode });
+        io.emit('gameStart', {
+            mode: gameMode,
+            seekerId: seekerId,
+            matchStartTime: matchStartTime,
+            hnsTimeLimit: hnsTimeLimit
+        });
     }
 
     socket.on('update', (data) => {
@@ -529,36 +550,58 @@ io.on('connection', (socket) => {
 function checkWinCondition() {
     if (gameState !== 'PLAYING') return;
 
+    if (gameMode === 'hideandseek') {
+        const hiders = Object.values(players).filter(p => p.isHider);
+        const aliveHiders = hiders.filter(p => (p.lives > 0 && p.alive));
+        const now = Date.now();
+
+        if (aliveHiders.length === 0) {
+            // Seeker wins
+            endMatch(seekerId);
+        } else if (now - matchStartTime > hnsTimeLimit) {
+            // Hiders win (pick first alive hider as honorary winner)
+            endMatch(aliveHiders[0].id, 'HIDERS');
+        }
+        return;
+    }
+
     const alivePlayers = Object.values(players).filter(p => !p.isWaiting && (p.lives > 0 || p.alive));
 
     // If only 1 player remains with lives
     if (alivePlayers.length <= 1) {
         const winner = alivePlayers.length === 1 ? alivePlayers[0] : null;
-        const maxLives = gameMode === 'soccer' ? 2 : 3;
-        const results = Object.values(players).map(p => ({
-            nickname: p.nickname,
-            kills: p.kills,
-            deaths: maxLives - (p.lives || 0),
-            isWinner: winner && p.id === winner.id
-        }));
-
-        io.emit('matchResults', {
-            winner: winner ? winner.nickname : 'No one',
-            results,
-            mode: gameMode
-        });
-
-        // Return to Lobby state
-        gameState = 'LOBBY';
-        for (let id in players) {
-            players[id].isReady = false;
-            players[id].isWaiting = false;
-            players[id].alive = true;
-            players[id].health = players[id].maxHealth;
-            // lives will be reset in startMatch
-        }
-        io.emit('lobbyUpdate', { players });
+        endMatch(winner ? winner.id : null);
     }
+}
+
+function endMatch(winnerId, customWinnerName = null) {
+    const winner = winnerId ? players[winnerId] : null;
+    const maxLives = gameMode === 'soccer' ? 2 : (gameMode === 'hideandseek' ? 1 : 3);
+    const results = Object.values(players).map(p => ({
+        nickname: p.nickname,
+        kills: p.kills,
+        deaths: maxLives - (p.lives || 0),
+        isWinner: (winner && p.id === winner.id) || (customWinnerName === 'HIDERS' && p.isHider)
+    }));
+
+    io.emit('matchResults', {
+        winner: customWinnerName || (winner ? winner.nickname : 'No one'),
+        results,
+        mode: gameMode
+    });
+
+    // Return to Lobby state
+    gameState = 'LOBBY';
+    for (let id in players) {
+        players[id].isReady = false;
+        players[id].isWaiting = false;
+        players[id].alive = true;
+        players[id].health = players[id].maxHealth;
+        players[id].lives = 3; // Reset lives for lobby movement
+        players[id].isHider = false;
+    }
+    seekerId = null;
+    io.emit('lobbyUpdate', { players });
 }
 
 // Authoritative Physics Loop (60Hz)
@@ -587,6 +630,39 @@ setInterval(() => {
                 player.respawnSpeedUntil = now + 3000;
                 // Position stays where they died as per user request
                 delete deadPlayers[id];
+            }
+            // POSITION UPDATES (Authoritative - Collision already handled by client sliding, but verified here)
+            // Manual map bounds
+            player.x = Math.max(0, Math.min(WORLD_WIDTH, player.x));
+            player.y = Math.max(0, Math.min(WORLD_HEIGHT, player.y));
+
+            // Hide and Seek - Seeker catching hider
+            if (gameMode === 'hideandseek' && seekerId === id && player.alive) {
+                for (let targetId in players) {
+                    let target = players[targetId];
+                    if (targetId !== id && target.alive && target.isHider) {
+                        const dist = Math.sqrt(Math.pow(player.x - target.x, 2) + Math.pow(player.y - target.y, 2));
+                        if (dist < 50) { // Catch range
+                            target.health = 0;
+                            handleDeath(targetId, id);
+                            io.emit('catchNotification', { seeker: id, hider: targetId });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Hide and Seek Win Conditions
+        if (gameState === 'PLAYING' && gameMode === 'hideandseek') {
+            const hiders = Object.values(players).filter(p => p.isHider);
+            const aliveHiders = hiders.filter(p => (p.lives > 0 || p.alive));
+
+            if (aliveHiders.length === 0) {
+                // Seeker wins
+                announceResults(seekerId);
+            } else if (Date.now() - matchStartTime > hnsTimeLimit) {
+                // Hiders win (announce one of them or group)
+                announceResults('HIDERS');
             }
         }
 

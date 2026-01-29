@@ -6,6 +6,7 @@ const socket = io();
 const uiAlive = document.getElementById('alive-count');
 const uiKills = document.getElementById('kill-count');
 const uiLives = document.getElementById('lives-count');
+const uiTimer = document.getElementById('timer-display');
 const uiHealthBar = document.getElementById('health-bar');
 const uiHealthText = document.getElementById('health-text');
 const uiSuperBar = document.getElementById('super-bar');
@@ -134,9 +135,12 @@ let camera = { x: 0, y: 0 };
 let lastShootTime = 0;
 let gameState = 'LOBBY';
 let gameMode = 'deathmatch';
+let seekerId = null;
 let isReady = false;
 let spectatingId = null;
 let ball = null; // Soccer ball state
+let matchStartTime = 0;
+let hnsTimeLimit = 0;
 
 // Interpolation state
 let networkState = {
@@ -413,6 +417,9 @@ socket.on('gameStart', (data) => {
     uiLayer.classList.remove('hidden');
     gameState = 'PLAYING';
     gameMode = data.mode || 'deathmatch';
+    seekerId = data.seekerId || null;
+    matchStartTime = data.matchStartTime || 0;
+    hnsTimeLimit = data.hnsTimeLimit || 0;
 });
 
 btnDeathmatch.onclick = () => {
@@ -421,6 +428,11 @@ btnDeathmatch.onclick = () => {
 
 btnSoccer.onclick = () => {
     socket.emit('selectMode', { mode: 'soccer' });
+};
+
+const btnHNS = document.getElementById('mode-hns');
+btnHNS.onclick = () => {
+    socket.emit('selectMode', { mode: 'hideandseek' });
 };
 
 socket.on('matchResults', (data) => {
@@ -505,11 +517,27 @@ socket.on('state', (data) => {
 
         // UI Updates
         if (uiKills) uiKills.innerText = me.kills;
-        if (uiLives) uiLives.innerText = me.lives;
+
         uiHealthBar.style.width = `${(me.health / me.maxHealth) * 100}%`;
         uiHealthText.innerText = `${Math.ceil(me.health)}/${me.maxHealth}`;
+
         uiSuperBar.style.width = `${me.superCharge}%`;
         uiSuperText.innerText = `${Math.floor(me.superCharge)}%`;
+
+        if (gameMode === 'hideandseek') {
+            const isSeeker = (myId === seekerId);
+            uiLives.innerText = isSeeker ? "SEEKER (Infinite)" : "HIDER (1 Life)";
+
+            const elapsed = Date.now() - matchStartTime;
+            const remaining = Math.max(0, hnsTimeLimit - elapsed);
+            const seconds = Math.floor(remaining / 1000);
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            if (uiTimer) uiTimer.innerText = `Time: ${mins}:${secs < 10 ? '0' : ''}${secs}`;
+        } else {
+            if (uiLives) uiLives.innerText = me.lives;
+            if (uiTimer) uiTimer.innerText = "";
+        }
 
         // Update ammo clips
         uiAmmoContainer.innerHTML = '';
@@ -622,7 +650,10 @@ function update() {
     if (!myId || !players[myId]) return;
 
     const me = players[myId];
-    if (!me.alive || me.lives <= 0 || Date.now() < (me.frozenUntil || 0) || Date.now() < (me.spinningUntil || 0)) return;
+
+    // In Lobby, always allow movement if alive. In Play, check lives.
+    if (!me.alive || Date.now() < (me.frozenUntil || 0) || Date.now() < (me.spinningUntil || 0)) return;
+    if (gameState === 'PLAYING' && me.lives <= 0) return;
 
     // CLIENT-SIDE DASH PREDICTION
     if (Date.now() < (me.dashingUntil || 0)) {
@@ -899,6 +930,52 @@ function draw() {
     }
     ctx.restore();
 
+    // HIDE AND SEEK DARKNESS MASK (Before players, after static surroundings)
+    if (gameMode === 'hideandseek' && myId === seekerId) {
+        ctx.save();
+        // Create a mask canvas if needed or just use globalCompositeOperation
+        // We'll use a radial gradient + arc for the flashlight
+
+        // 1. Fill screen with darkness (relative to camera)
+        ctx.fillStyle = 'rgba(0,0,0,0.95)';
+        ctx.fillRect(camera.x, camera.y, canvas.width, canvas.height);
+
+        // 2. Punch out the flashlight hole
+        ctx.globalCompositeOperation = 'destination-out';
+
+        const beamAngle = 0.5; // rad (~30 deg)
+        const beamDist = 600;
+
+        ctx.beginPath();
+        ctx.moveTo(me.x, me.y);
+        ctx.arc(me.x, me.y, beamDist, me.angle - beamAngle, me.angle + beamAngle);
+        ctx.closePath();
+
+        // Use a gradient for soft edges
+        const grad = ctx.createRadialGradient(me.x, me.y, 50, me.x, me.y, beamDist);
+        grad.addColorStop(0, 'rgba(255,255,255,1)');
+        grad.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        // 3. Small circle around seeker
+        ctx.beginPath();
+        ctx.arc(me.x, me.y, 100, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+
+        // Draw visual light beam (subtle glow)
+        ctx.save();
+        ctx.globalAlpha = 0.2;
+        ctx.fillStyle = '#ffffaa';
+        ctx.beginPath();
+        ctx.moveTo(me.x, me.y);
+        ctx.arc(me.x, me.y, beamDist, me.angle - beamAngle, me.angle + beamAngle);
+        ctx.fill();
+        ctx.restore();
+    }
+
     // Draw Ice Trails
     iceTrails.forEach(trail => {
         ctx.save();
@@ -922,6 +999,21 @@ function draw() {
         if (!players[id].alive) continue;
 
         const p = players[id];
+
+        // Hide and Seek Visibility Filter
+        if (gameMode === 'hideandseek' && myId === seekerId && id !== myId) {
+            const dx = p.x - me.x;
+            const dy = p.y - me.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const ang = Math.atan2(dy, dx);
+            let diff = ang - me.angle;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+
+            // Only visible if in beam or very close
+            if (dist > 600 || (Math.abs(diff) > 0.6 && dist > 100)) continue;
+        }
+
         let drawX = p.x;
         let drawY = p.y;
         let drawAngle = p.angle;
